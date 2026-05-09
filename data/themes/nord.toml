@@ -1,0 +1,18 @@
+name = "Nord"
+author = "Arctic Ice Studio"
+
+[colors]
+primary = "#88c0d0"
+secondary = "#81a1c1"
+background = "#2e3440"
+surface = "#3b4252"
+text = "#eceff4"
+text_dim = "#4c566a"
+success = "#a3be8c"
+warning = "#ebcb8b"
+error = "#bf616a"
+user_bubble = "#88c0d0"
+assistant_bubble = "#a3be8c"
+tool_bubble = "#ebcb8b"
+border = "#4c566a"
+title = "#81a1c1"

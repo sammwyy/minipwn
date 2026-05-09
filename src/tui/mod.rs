@@ -5,6 +5,7 @@ mod commands;
 mod events;
 mod input;
 mod render;
+mod theme;
 mod worker_select;
 
 use anyhow::Result;

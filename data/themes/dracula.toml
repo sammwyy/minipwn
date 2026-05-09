@@ -1,0 +1,18 @@
+name = "Dracula"
+author = "Zeno Rocha"
+
+[colors]
+primary = "#bd93f9"
+secondary = "#ff79c6"
+background = "#282a36"
+surface = "#44475a"
+text = "#f8f8f2"
+text_dim = "#6272a4"
+success = "#50fa7b"
+warning = "#ffb86c"
+error = "#ff5555"
+user_bubble = "#8be9fd"
+assistant_bubble = "#50fa7b"
+tool_bubble = "#f1fa8c"
+border = "#6272a4"
+title = "#bd93f9"

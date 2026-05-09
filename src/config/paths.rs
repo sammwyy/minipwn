@@ -10,7 +10,25 @@ use std::path::PathBuf;
 pub fn config_dir() -> Result<PathBuf> {
     let base = dirs::config_dir()
         .context("Could not determine system config directory")?;
-    Ok(base.join("minipwn"))
+    let p = base.join("minipwn");
+    if !p.exists() {
+        let _ = std::fs::create_dir_all(&p);
+    }
+    Ok(p)
+}
+
+/// Returns the global config.toml path.
+pub fn global_config_path() -> Result<PathBuf> {
+    Ok(config_dir()?.join("config.toml"))
+}
+
+/// Returns the themes directory inside the config directory.
+pub fn themes_dir() -> Result<PathBuf> {
+    let p = config_dir()?.join("themes");
+    if !p.exists() {
+        let _ = std::fs::create_dir_all(&p);
+    }
+    Ok(p)
 }
 
 /// Returns the workers.toml path inside the config directory.
@@ -24,8 +42,6 @@ pub fn secrets_env_path() -> Result<PathBuf> {
 }
 
 /// Returns the worker config path for the worker mode.
-/// Looks for minipwn.worker.toml in the current directory first,
-/// then falls back to the global config directory.
 pub fn worker_config_path(override_path: Option<&str>) -> Result<PathBuf> {
     if let Some(p) = override_path {
         return Ok(PathBuf::from(p));

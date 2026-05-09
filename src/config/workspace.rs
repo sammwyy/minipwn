@@ -9,6 +9,7 @@ use std::path::PathBuf;
 pub const WORKSPACE_DIR: &str = ".minipwn";
 const CHATS_DIR: &str = "chats";
 const WORKSPACE_TOML: &str = "workspace.toml";
+const STATS_TOML: &str = "stats.toml";
 pub const SYSTEM_PROMPT_FILE: &str = "system_prompt.md";
 
 /// Default system prompt embedded at compile time.
@@ -18,14 +19,17 @@ pub const DEFAULT_SYSTEM_PROMPT: &str = include_str!("../system_prompt.md");
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkspaceMeta {
     pub current_chat: String,
-    pub provider: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WorkspaceStats {
+    pub total_tokens: u64,
 }
 
 impl Default for WorkspaceMeta {
     fn default() -> Self {
         Self {
             current_chat: "1".to_string(),
-            provider: "openai".to_string(),
         }
     }
 }
@@ -82,6 +86,31 @@ pub fn save_workspace_meta(meta: &WorkspaceMeta) -> Result<()> {
     let content = toml::to_string_pretty(meta)?;
     std::fs::write(path, content)?;
     Ok(())
+}
+
+/// Load workspace stats.
+pub fn load_workspace_stats() -> Result<WorkspaceStats> {
+    let path = workspace_dir()?.join(STATS_TOML);
+    if !path.exists() {
+        return Ok(WorkspaceStats::default());
+    }
+    let content = std::fs::read_to_string(path)?;
+    Ok(toml::from_str(&content)?)
+}
+
+/// Save workspace stats.
+pub fn save_workspace_stats(stats: &WorkspaceStats) -> Result<()> {
+    let path = workspace_dir()?.join(STATS_TOML);
+    let content = toml::to_string_pretty(stats)?;
+    std::fs::write(path, content)?;
+    Ok(())
+}
+
+/// Record token usage.
+pub fn add_tokens(tokens: u64) -> Result<()> {
+    let mut stats = load_workspace_stats()?;
+    stats.total_tokens += tokens;
+    save_workspace_stats(&stats)
 }
 
 /// Load a chat session by ID, creating it if it doesn't exist.

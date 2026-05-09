@@ -3,6 +3,7 @@
 use crate::config::Provider;
 use crate::config::{
     SavedWorker, censor_key, clear_chat, list_chats, load_workers_list, save_workers_list, save_workspace_meta,
+    save_global_config,
 };
 
 use super::app::App;
@@ -20,6 +21,7 @@ pub async fn handle_command(app: &mut App, input: &str) -> String {
         "chat" => cmd_chat(app, &parts[1..]),
         "clear" => cmd_clear(app),
         "worker" => cmd_worker(app, &parts[1..]),
+        "theme" => cmd_theme(app, &parts[1..]),
         _ => format!("Unknown command: /{cmd}. Type /help for available commands."),
     }
 }
@@ -35,7 +37,9 @@ fn cmd_help() -> String {
      /chat <id>                Switch to chat by ID\n\
      /clear                    Clear current chat history\n\
      /worker                   List saved workers\n\
-     /worker add <url> <sec>   Add a worker"
+     /worker add <url> <sec>   Add a worker\n\
+     /theme                    List themes\n\
+     /theme <id>               Set theme"
         .to_string()
 }
 
@@ -51,8 +55,8 @@ fn cmd_provider(app: &mut App, args: &[&str]) -> String {
     match Provider::from_str(id) {
         Some(p) => {
             app.provider = p.clone();
-            app.meta.provider = id.to_lowercase();
-            let _ = save_workspace_meta(&app.meta);
+            app.global_config.provider = id.to_lowercase();
+            let _ = save_global_config(&app.global_config);
             format!("Provider set to: {}", p.display_name())
         }
         None => format!(
@@ -64,7 +68,6 @@ fn cmd_provider(app: &mut App, args: &[&str]) -> String {
 
 fn cmd_apikey(app: &mut App, args: &[&str]) -> String {
     if args.is_empty() || args[0].is_empty() {
-        // Show current key (censored)
         let key = app.secrets.api_key(&app.provider).unwrap_or("(not set)");
         if key == "(not set)" {
             return format!("{} API key: (not set)", app.provider.display_name());
@@ -86,7 +89,6 @@ fn cmd_apikey(app: &mut App, args: &[&str]) -> String {
 
 async fn cmd_model(app: &mut App, args: &[&str]) -> String {
     if args.is_empty() || args[0].is_empty() {
-        // List models from API
         match crate::ai::AiClient::from_secrets(&app.secrets, &app.provider) {
             Ok(client) => match client.list_models().await {
                 Ok(models) => {
@@ -131,7 +133,6 @@ fn cmd_chat(app: &mut App, args: &[&str]) -> String {
     app.meta.current_chat = id.to_string();
     let _ = save_workspace_meta(&app.meta);
 
-    // Load last 10 messages
     app.bubbles = session
         .messages
         .iter()
@@ -141,6 +142,7 @@ fn cmd_chat(app: &mut App, args: &[&str]) -> String {
         .map(|m| super::app::Bubble {
             role: m.role.clone(),
             content: m.content.clone(),
+            is_ephemeral: false,
         })
         .collect();
 
@@ -160,15 +162,20 @@ fn cmd_clear(app: &mut App) -> String {
 fn cmd_worker(app: &mut App, args: &[&str]) -> String {
     if args.is_empty() || args[0].is_empty() {
         let list = load_workers_list().unwrap_or_default();
+        let current = match &app.execution_mode {
+            crate::tools::ExecutionMode::Local { .. } => "local".to_string(),
+            crate::tools::ExecutionMode::Remote { client, .. } => client.base_url.clone(),
+        };
+
+        let mut lines = vec![format!("Current worker: {}", current)];
         if list.workers.is_empty() {
-            return "No saved workers. Use /worker add <url> <secret> [name]".to_string();
+            lines.push("No saved workers. Use /worker add <url> <secret> [name]".to_string());
+        } else {
+            lines.push("Saved workers:".to_string());
+            for (i, w) in list.workers.iter().enumerate() {
+                lines.push(format!("  {}: {} ({})", i, w.name, w.url));
+            }
         }
-        let lines: Vec<String> = list
-            .workers
-            .iter()
-            .enumerate()
-            .map(|(i, w)| format!("{}: {} ({})", i, w.name, w.url))
-            .collect();
         return lines.join("\n");
     }
 
@@ -192,5 +199,28 @@ fn cmd_worker(app: &mut App, args: &[&str]) -> String {
         }
     } else {
         format!("Unknown subcommand: /worker {}", args[0])
+    }
+}
+
+fn cmd_theme(app: &mut App, args: &[&str]) -> String {
+    if args.is_empty() || args[0].is_empty() {
+        let themes = app.theme_registry.list();
+        let mut list = vec![format!("Current theme: {}", app.global_config.theme)];
+        list.push("Available themes:".to_string());
+        for (id, theme) in themes {
+            list.push(format!("  - {} (by {})", id, theme.author));
+        }
+        return list.join("\n");
+    }
+
+    let id = args[0];
+    match app.theme_registry.get(id) {
+        Some(theme) => {
+            app.theme = theme.clone();
+            app.global_config.theme = id.to_string();
+            let _ = save_global_config(&app.global_config);
+            format!("Theme set to: {}", theme.name)
+        }
+        None => format!("Theme '{}' not found.", id),
     }
 }

@@ -9,9 +9,10 @@ use std::time::Duration;
 use crate::ai::{AiClient, ChatMsg};
 use crate::config::{
     ChatMessage, Provider, SavedWorker, Secrets, WorkersList, WorkspaceMeta, append_message, load_chat, load_workers_list, load_workspace_meta,
-    save_workers_list,
+    save_workers_list, init_config_dirs, load_global_config, GlobalConfig, WorkspaceStats, load_workspace_stats, add_tokens,
 };
 use crate::config::load_system_prompt;
+use crate::tui::theme::{Theme, ThemeRegistry};
 use crate::tools::{ExecutionMode, extract_tool_call};
 use crate::worker::client::WorkerClient;
 
@@ -24,6 +25,7 @@ use super::worker_select::{WorkerChoice, worker_select_screen};
 pub struct Bubble {
     pub role: String, // "user" | "assistant" | "tool"
     pub content: String,
+    pub is_ephemeral: bool,
 }
 
 /// Main application state.
@@ -36,31 +38,43 @@ pub struct App {
     pub provider: Provider,
     pub secrets: Secrets,
     pub meta: WorkspaceMeta,
+    pub stats: WorkspaceStats,
+    pub global_config: GlobalConfig,
+    pub theme: Theme,
+    pub theme_registry: ThemeRegistry,
     pub execution_mode: ExecutionMode,
     pub is_thinking: bool,
     pub scroll_offset: u16,
     pub input_history: Vec<String>,
     pub input_history_pos: usize,
+    pub suggestions: Vec<String>,
 }
 
-impl App {
-    fn workspace_path() -> std::path::PathBuf {
-        std::env::current_dir().unwrap_or_default().join(".minipwn")
-    }
-}
+impl App {}
 
 /// Main TUI event loop.
 pub async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
+    // Initialize global config
+    init_config_dirs()?;
+    let global_config = load_global_config().unwrap_or_default();
+
+    // Setup themes
+    let theme_registry = ThemeRegistry::load();
+    let theme = theme_registry.get(&global_config.theme)
+        .cloned()
+        .unwrap_or_else(|| theme_registry.get("dracula").unwrap().clone());
+
     // Show worker selection screen
     let workers = load_workers_list().unwrap_or_default();
-    let choice = worker_select_screen(terminal, &workers).await?;
+    let choice = worker_select_screen(terminal, &workers, &theme).await?;
 
     let execution_mode = build_execution_mode(choice, &workers).await?;
 
     // Load workspace state
     let meta = load_workspace_meta().unwrap_or_default();
+    let stats = load_workspace_stats().unwrap_or_default();
     let secrets = Secrets::load().unwrap_or_default();
-    let provider = Provider::from_str(&meta.provider).unwrap_or(Provider::OpenAI);
+    let provider = Provider::from_str(&global_config.provider).unwrap_or(Provider::OpenAI);
 
     // Load recent chat history (last 10 messages)
     let session = load_chat(&meta.current_chat).unwrap_or_else(|_| crate::config::ChatSession {
@@ -77,6 +91,7 @@ pub async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Resul
         .map(|m| Bubble {
             role: m.role.clone(),
             content: m.content.clone(),
+            is_ephemeral: false,
         })
         .collect();
 
@@ -91,11 +106,16 @@ pub async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Resul
         provider,
         secrets,
         meta,
+        stats,
+        global_config,
+        theme,
+        theme_registry,
         execution_mode,
         is_thinking: false,
         scroll_offset: 0,
         input_history: vec![],
         input_history_pos: 0,
+        suggestions: vec![],
     };
 
     loop {
@@ -127,11 +147,16 @@ pub async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Resul
                         app.input_history_pos = app.input_history.len();
                         app.input.clear();
                         app.cursor = 0;
+                        app.suggestions.clear();
 
                         if input.starts_with('/') {
                             // Handle slash command
                             let result = handle_command(&mut app, &input).await;
-                            app.status = result;
+                            app.bubbles.push(Bubble {
+                                role: "assistant".to_string(),
+                                content: result,
+                                is_ephemeral: true,
+                            });
                         } else {
                             // Send message to AI
                             send_message(&mut app, terminal, &input).await?;
@@ -140,16 +165,19 @@ pub async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Resul
                     KeyCode::Char(c) => {
                         app.input.insert(app.cursor, c);
                         app.cursor += 1;
+                        update_suggestions(&mut app);
                     }
                     KeyCode::Backspace => {
                         if app.cursor > 0 {
                             app.cursor -= 1;
                             app.input.remove(app.cursor);
+                            update_suggestions(&mut app);
                         }
                     }
                     KeyCode::Delete => {
                         if app.cursor < app.input.len() {
                             app.input.remove(app.cursor);
+                            update_suggestions(&mut app);
                         }
                     }
                     KeyCode::Left => {
@@ -173,6 +201,7 @@ pub async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Resul
                             app.input_history_pos -= 1;
                             app.input = app.input_history[app.input_history_pos].clone();
                             app.cursor = app.input.len();
+                            update_suggestions(&mut app);
                         }
                     }
                     KeyCode::Down => {
@@ -185,6 +214,7 @@ pub async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Resul
                                 app.input = app.input_history[app.input_history_pos].clone();
                                 app.cursor = app.input.len();
                             }
+                            update_suggestions(&mut app);
                         }
                     }
                     KeyCode::PageUp => {
@@ -212,6 +242,7 @@ async fn send_message(
     app.bubbles.push(Bubble {
         role: "user".to_string(),
         content: content.to_string(),
+        is_ephemeral: false,
     });
     append_message(
         &app.chat_id,
@@ -230,6 +261,7 @@ async fn send_message(
             app.bubbles.push(Bubble {
                 role: "assistant".to_string(),
                 content: format!("Error: {}. Use /provider and /apikey to configure.", e),
+                is_ephemeral: false,
             });
             return Ok(());
         }
@@ -264,6 +296,7 @@ async fn send_message(
             app.bubbles.push(Bubble {
                 role: "assistant".to_string(),
                 content: "[Max tool iterations reached]".to_string(),
+                is_ephemeral: false,
             });
             break;
         }
@@ -275,10 +308,18 @@ async fn send_message(
                 app.bubbles.push(Bubble {
                     role: "assistant".to_string(),
                     content: format!("API error: {}", e),
+                    is_ephemeral: false,
                 });
                 break;
             }
         };
+
+        // Estimate tokens (very rough: chars / 4)
+        let sent_tokens = messages.iter().map(|m| m.content.len()).sum::<usize>() / 4;
+        let recv_tokens = reply.len() / 4;
+        let total = (sent_tokens + recv_tokens) as u64;
+        let _ = add_tokens(total);
+        app.stats.total_tokens += total;
 
         // Add assistant reply to message history
         messages.push(ChatMsg {
@@ -292,6 +333,7 @@ async fn send_message(
             app.bubbles.push(Bubble {
                 role: "assistant".to_string(),
                 content: reply.clone(),
+                is_ephemeral: false,
             });
             append_message(
                 &app.chat_id,
@@ -316,6 +358,7 @@ async fn send_message(
             app.bubbles.push(Bubble {
                 role: "tool".to_string(),
                 content: result_text.clone(),
+                is_ephemeral: false,
             });
 
             // Feed result back to AI
@@ -330,6 +373,7 @@ async fn send_message(
             app.bubbles.push(Bubble {
                 role: "assistant".to_string(),
                 content: reply.clone(),
+                is_ephemeral: false,
             });
             append_message(
                 &app.chat_id,
@@ -343,9 +387,32 @@ async fn send_message(
         }
     }
 
+    // Clean up ephemeral bubbles when user sends a new message
+    // Actually, user wants them to stay until next message or something?
+    // "chat bubble que no quede en el historial"
+    // I'll keep them in app.bubbles but they won't be saved.
+    // When run_app starts, it only loads from disk, so ephemeral bubbles disappear.
+
     app.is_thinking = false;
     app.scroll_offset = 0;
     Ok(())
+}
+
+fn update_suggestions(app: &mut App) {
+    if !app.input.starts_with('/') {
+        app.suggestions.clear();
+        return;
+    }
+
+    let cmd_part = app.input.trim_start_matches('/');
+    let commands = [
+        "help", "provider", "apikey", "model", "chat", "clear", "worker", "theme"
+    ];
+
+    app.suggestions = commands.iter()
+        .filter(|&&c| c.starts_with(cmd_part))
+        .map(|&c| format!("/{}", c))
+        .collect();
 }
 
 /// Build the system prompt, injecting worker OS info if available.

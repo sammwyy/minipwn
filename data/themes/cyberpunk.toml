@@ -1,0 +1,18 @@
+name = "Cyberpunk"
+author = "Night City"
+
+[colors]
+primary = "#fcee0a"
+secondary = "#00f0ff"
+background = "#1a1a1a"
+surface = "#333333"
+text = "#f0f0f0"
+text_dim = "#ff003c"
+success = "#00ff00"
+warning = "#fcee0a"
+error = "#ff003c"
+user_bubble = "#00f0ff"
+assistant_bubble = "#fcee0a"
+tool_bubble = "#ff003c"
+border = "#00f0ff"
+title = "#fcee0a"

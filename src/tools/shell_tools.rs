@@ -1,11 +1,10 @@
 //! Shell tool implementations (local execution; remote execution goes via worker client).
 
-use std::collections::HashMap;
-use std::process::{Child, Command};
-use std::sync::{Arc, Mutex};
+use std::process::Command;
 
 use super::{ToolCall, ToolResult};
 
+/*
 /// A running shell session.
 struct ShellSession {
     child: Child,
@@ -22,6 +21,7 @@ impl ShellRegistry {
         Self::default()
     }
 }
+*/
 
 /// Execute a one-shot shell command and return its combined output.
 pub fn shell_exec_local(command: &str) -> ToolResult {

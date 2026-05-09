@@ -1,0 +1,18 @@
+name = "Matrix"
+author = "The Oracle"
+
+[colors]
+primary = "#00ff41"
+secondary = "#008f11"
+background = "#000000"
+surface = "#003b00"
+text = "#00ff41"
+text_dim = "#008f11"
+success = "#00ff41"
+warning = "#d4ff00"
+error = "#ff0000"
+user_bubble = "#00ff41"
+assistant_bubble = "#00ff41"
+tool_bubble = "#00ff41"
+border = "#008f11"
+title = "#00ff41"

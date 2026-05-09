@@ -45,6 +45,7 @@ pub fn sanitize_path(input: &str) -> Result<PathBuf> {
     Ok(cleaned)
 }
 
+/*
 /// Sanitize and resolve a path relative to the workspace root.
 pub fn resolve_workspace_path(workspace: &Path, input: &str) -> Result<PathBuf> {
     let relative = sanitize_path(input)?;
@@ -64,6 +65,7 @@ pub fn resolve_workspace_path(workspace: &Path, input: &str) -> Result<PathBuf> 
 
     Ok(full)
 }
+*/
 
 #[cfg(test)]
 mod tests {

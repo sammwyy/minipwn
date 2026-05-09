@@ -9,7 +9,7 @@ use crate::tools::{ToolCall, ToolResult};
 /// Client for a remote MiniPWN worker instance.
 #[derive(Clone)]
 pub struct WorkerClient {
-    base_url: String,
+    pub base_url: String,
     secret: String,
     client: Client,
 }
