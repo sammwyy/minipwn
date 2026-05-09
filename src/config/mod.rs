@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 pub struct GlobalConfig {
     pub provider: String,
     pub theme: String,
+    pub max_iterations: usize,
     pub tui: TuiConfig,
 }
 
@@ -30,6 +31,7 @@ impl Default for GlobalConfig {
         Self {
             provider: "openai".to_string(),
             theme: "dracula".to_string(),
+            max_iterations: 15,
             tui: TuiConfig {
                 max_history_display: 10,
             },

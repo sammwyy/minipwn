@@ -435,14 +435,14 @@ async fn send_message(
     terminal.draw(|f| render_ui(f, app))?;
 
     let mut iterations = 0;
-    let max_iterations = 10;
+    let max_iterations = app.global_config.max_iterations;
 
     loop {
         iterations += 1;
         if iterations > max_iterations {
             app.bubbles.push(Bubble {
                 role: "assistant".to_string(),
-                content: "[Max tool iterations reached]".to_string(),
+                content: "[Max tool iterations reached. Type 'Continue' to keep going.]".to_string(),
                 is_ephemeral: false,
             });
             break;

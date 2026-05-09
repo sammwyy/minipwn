@@ -8,7 +8,10 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
 
+use pulldown_cmark::{Parser, Event, Tag, TagEnd};
+
 use super::app::App;
+use crate::tui::theme::Theme;
 
 /// Main render function called every frame.
 pub fn render_ui(f: &mut Frame, app: &App) {
@@ -44,6 +47,115 @@ pub fn render_ui(f: &mut Frame, app: &App) {
     if app.modal.is_some() {
         render_modal(f, app);
     }
+}
+
+fn parse_markdown<'a>(text: &'a str, theme: &Theme) -> Vec<Line<'a>> {
+    let parser = Parser::new(text);
+    let mut lines = Vec::new();
+    let mut current_line = Vec::new();
+    let mut current_style = Style::default().fg(theme.text());
+    let mut tag_stack = Vec::new();
+
+    for event in parser {
+        match event {
+            Event::Start(tag) => {
+                tag_stack.push(tag.clone());
+                match tag {
+                    Tag::Strong => current_style = current_style.add_modifier(Modifier::BOLD),
+                    Tag::Emphasis => current_style = current_style.add_modifier(Modifier::ITALIC),
+                    Tag::Strikethrough => current_style = current_style.add_modifier(Modifier::CROSSED_OUT),
+                    Tag::Link { .. } => current_style = current_style.fg(theme.primary()).add_modifier(Modifier::UNDERLINED),
+                    Tag::Heading { .. } => current_style = current_style.add_modifier(Modifier::BOLD).fg(theme.primary()),
+                    Tag::BlockQuote(_) => current_style = current_style.fg(theme.text_dim()).add_modifier(Modifier::ITALIC),
+                    _ => {}
+                }
+            }
+            Event::End(tag_end) => {
+                tag_stack.pop();
+                current_style = Style::default().fg(theme.text());
+                for tag in &tag_stack {
+                    match tag {
+                        Tag::Strong => current_style = current_style.add_modifier(Modifier::BOLD),
+                        Tag::Emphasis => current_style = current_style.add_modifier(Modifier::ITALIC),
+                        Tag::Strikethrough => current_style = current_style.add_modifier(Modifier::CROSSED_OUT),
+                        Tag::Link { .. } => current_style = current_style.fg(theme.primary()).add_modifier(Modifier::UNDERLINED),
+                        Tag::Heading { .. } => current_style = current_style.add_modifier(Modifier::BOLD).fg(theme.primary()),
+                        Tag::BlockQuote(_) => current_style = current_style.fg(theme.text_dim()).add_modifier(Modifier::ITALIC),
+                        _ => {}
+                    }
+                }
+                
+                match tag_end {
+                    TagEnd::Heading(_) | TagEnd::Paragraph | TagEnd::BlockQuote(_) | TagEnd::List(_) | TagEnd::Item => {
+                        if !current_line.is_empty() {
+                            lines.push(Line::from(current_line.clone()));
+                            current_line.clear();
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Event::Text(t) => {
+                current_line.push(Span::styled(t.to_string(), current_style));
+            }
+            Event::Code(t) => {
+                current_line.push(Span::styled(format!(" {} ", t), current_style.bg(theme.surface()).fg(theme.secondary())));
+            }
+            Event::SoftBreak | Event::HardBreak => {
+                if !current_line.is_empty() {
+                    lines.push(Line::from(current_line.clone()));
+                    current_line.clear();
+                }
+            }
+            _ => {}
+        }
+    }
+    
+    if !current_line.is_empty() {
+        lines.push(Line::from(current_line));
+    }
+    
+    lines
+}
+
+fn wrap_line<'a>(line: Line<'a>, max_width: usize) -> Vec<Line<'a>> {
+    let mut wrapped = Vec::new();
+    let mut current_spans = Vec::new();
+    let mut current_width = 0;
+
+    for span in line.spans {
+        let content = span.content.as_ref();
+        let words = content.split_inclusive(' ');
+
+        for word in words {
+            let word_width = word.chars().count();
+            
+            if current_width + word_width > max_width && current_width > 0 {
+                wrapped.push(Line::from(current_spans));
+                current_spans = Vec::new();
+                current_width = 0;
+            }
+
+            // Handle very long words by force-breaking
+            let mut word_rest = word;
+            while word_rest.chars().count() > max_width {
+                let (head, tail) = word_rest.split_at(max_width);
+                wrapped.push(Line::from(vec![Span::styled(head.to_string(), span.style)]));
+                word_rest = tail;
+            }
+
+            if !word_rest.is_empty() {
+                current_spans.push(Span::styled(word_rest.to_string(), span.style));
+                current_width += word_rest.chars().count();
+            }
+        }
+    }
+
+    if !current_spans.is_empty() {
+        wrapped.push(Line::from(current_spans));
+    }
+
+    wrapped
 }
 
 fn render_modal(f: &mut Frame, app: &App) {
@@ -312,41 +424,17 @@ fn render_bubbles(f: &mut Frame, area: Rect, app: &App) {
         let max_bubble_width = (inner_area.width.saturating_sub(20)) as usize;
         let is_user = bubble.role == "user";
 
-        let max_text_width = max_bubble_width.saturating_sub(3); // -1 for border, -2 for left/right padding
+        let max_text_width = max_bubble_width.saturating_sub(4); // -1 for border, -3 for left/right padding
 
         let mut wrapped_lines = Vec::new();
-        for content_line in bubble.content.split('\n') {
-            if content_line.is_empty() {
-                wrapped_lines.push(String::new());
-                continue;
-            }
-            let mut line_rest = content_line.to_string();
-            while line_rest.chars().count() > max_text_width {
-                let prefix: String = line_rest.chars().take(max_text_width).collect();
-                if let Some(space_idx) = prefix.rfind(' ') {
-                    if space_idx > 0 {
-                        let (part, rest) = line_rest.split_at(space_idx);
-                        wrapped_lines.push(part.to_string());
-                        line_rest = rest[1..].to_string(); // Skip the space
-                        continue;
-                    } else {
-                        line_rest = line_rest[1..].to_string(); // Strip leading space
-                        continue;
-                    }
-                }
-                // Hard break
-                let part: String = line_rest.chars().take(max_text_width).collect();
-                wrapped_lines.push(part);
-                line_rest = line_rest.chars().skip(max_text_width).collect();
-            }
-            if !line_rest.is_empty() {
-                wrapped_lines.push(line_rest);
-            }
+        let logical_lines = parse_markdown(&bubble.content, &app.theme);
+        for line in logical_lines {
+            wrapped_lines.extend(wrap_line(line, max_text_width));
         }
 
         let max_line_len = wrapped_lines
             .iter()
-            .map(|l| l.chars().count())
+            .map(|l| l.width())
             .max()
             .unwrap_or(0);
         let title_len = role_name.chars().count() + icon.chars().count() + 3;
@@ -380,24 +468,26 @@ fn render_bubbles(f: &mut Frame, area: Rect, app: &App) {
         let border_span = Span::styled("▌", Style::default().fg(color).bg(app.theme.background()));
 
         for wrapped_line in wrapped_lines {
-            let mut line_content = format!(" {} ", wrapped_line);
-            let char_count = line_content.chars().count();
-            if char_count < actual_bubble_width.saturating_sub(1) {
-                line_content
-                    .push_str(&" ".repeat(actual_bubble_width.saturating_sub(1) - char_count));
-            }
-
-            lines.push(Line::from(vec![
+            let line_width = wrapped_line.width();
+            let mut spans = vec![
                 left_padding.clone(),
                 border_span.clone(),
-                Span::styled(
-                    line_content,
-                    Style::default()
-                        .fg(text_color)
-                        .bg(app.theme.background())
-                        .add_modifier(opacity),
-                ),
-            ]));
+                Span::styled(" ", Style::default().bg(app.theme.background())),
+            ];
+            
+            for mut span in wrapped_line.spans {
+                span.style = span.style.bg(app.theme.background()).add_modifier(opacity);
+                spans.push(span);
+            }
+
+            if line_width < actual_bubble_width.saturating_sub(2) {
+                spans.push(Span::styled(
+                    " ".repeat(actual_bubble_width.saturating_sub(2) - line_width),
+                    Style::default().bg(app.theme.background()),
+                ));
+            }
+
+            lines.push(Line::from(spans));
         }
         lines.push(Line::from(""));
 
