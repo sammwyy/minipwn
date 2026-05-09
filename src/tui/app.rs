@@ -11,12 +11,12 @@ use crate::config::{
     ChatMessage, Provider, SavedWorker, Secrets, WorkersList, WorkspaceMeta, append_message, load_chat, load_workers_list, load_workspace_meta,
     save_workers_list, init_config_dirs, load_global_config, GlobalConfig, WorkspaceStats, load_workspace_stats, add_tokens,
 };
+use crate::commands::CommandRegistry;
 use crate::config::load_system_prompt;
 use crate::tui::theme::{Theme, ThemeRegistry};
 use crate::tools::{ExecutionMode, extract_tool_call};
 use crate::worker::client::WorkerClient;
 
-use super::commands::handle_command;
 use super::render::render_ui;
 use super::worker_select::{WorkerChoice, worker_select_screen};
 
@@ -26,6 +26,37 @@ pub struct Bubble {
     pub role: String, // "user" | "assistant" | "tool"
     pub content: String,
     pub is_ephemeral: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct ModalItem {
+    pub id: String,
+    pub label: String,
+}
+
+use std::sync::Arc;
+
+pub struct ModalCallback(pub Arc<dyn Fn(&mut App, String) + Send + Sync>);
+
+impl std::fmt::Debug for ModalCallback {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ModalCallback")
+    }
+}
+
+impl Clone for ModalCallback {
+    fn clone(&self) -> Self {
+        Self(Arc::clone(&self.0))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ModalState {
+    pub title: String,
+    pub items: Vec<ModalItem>,
+    pub selected: usize,
+    pub filter: String,
+    pub callback: ModalCallback,
 }
 
 /// Main application state.
@@ -48,6 +79,7 @@ pub struct App {
     pub input_history: Vec<String>,
     pub input_history_pos: usize,
     pub suggestions: Vec<String>,
+    pub modal: Option<ModalState>,
 }
 
 impl App {}
@@ -116,6 +148,7 @@ pub async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Resul
         input_history: vec![],
         input_history_pos: 0,
         suggestions: vec![],
+        modal: None,
     };
 
     loop {
@@ -131,6 +164,43 @@ pub async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Resul
                         && key.modifiers.contains(KeyModifiers::CONTROL))
                 {
                     break;
+                }
+                if let Some(modal) = &mut app.modal {
+                    match key.code {
+                        KeyCode::Esc => {
+                            app.modal = None;
+                        }
+                        KeyCode::Up => {
+                            if modal.selected > 0 {
+                                modal.selected -= 1;
+                            }
+                        }
+                        KeyCode::Down => {
+                            let filtered_count = modal.items.iter().filter(|i| i.label.to_lowercase().contains(&modal.filter.to_lowercase())).count();
+                            if modal.selected + 1 < filtered_count {
+                                modal.selected += 1;
+                            }
+                        }
+                        KeyCode::Enter => {
+                            let filtered: Vec<_> = modal.items.iter().filter(|i| i.label.to_lowercase().contains(&modal.filter.to_lowercase())).collect();
+                            if let Some(item) = filtered.get(modal.selected) {
+                                let id = item.id.clone();
+                                let callback = modal.callback.clone();
+                                app.modal = None;
+                                (callback.0)(&mut app, id);
+                            }
+                        }
+                        KeyCode::Char(c) => {
+                            modal.filter.push(c);
+                            modal.selected = 0;
+                        }
+                        KeyCode::Backspace => {
+                            modal.filter.pop();
+                            modal.selected = 0;
+                        }
+                        _ => {}
+                    }
+                    continue;
                 }
 
                 match key.code {
@@ -150,13 +220,38 @@ pub async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Resul
                         app.suggestions.clear();
 
                         if input.starts_with('/') {
-                            // Handle slash command
-                            let result = handle_command(&mut app, &input).await;
-                            app.bubbles.push(Bubble {
-                                role: "assistant".to_string(),
-                                content: result,
-                                is_ephemeral: true,
-                            });
+                            // Handle modular command
+                            let parts: Vec<&str> = input.split_whitespace().collect();
+                            let cmd_name = parts[0].trim_start_matches('/');
+                            let args = &parts[1..];
+
+                            let registry = CommandRegistry::new();
+                            if let Some(cmd) = registry.find(cmd_name) {
+                                match cmd.execute(&mut app, args).await {
+                                    Ok(result) => {
+                                        if !result.is_empty() {
+                                            app.bubbles.push(Bubble {
+                                                role: "assistant".to_string(),
+                                                content: result,
+                                                is_ephemeral: true,
+                                            });
+                                        }
+                                    }
+                                    Err(e) => {
+                                        app.bubbles.push(Bubble {
+                                            role: "assistant".to_string(),
+                                            content: format!("Command error: {}", e),
+                                            is_ephemeral: true,
+                                        });
+                                    }
+                                }
+                            } else {
+                                app.bubbles.push(Bubble {
+                                    role: "assistant".to_string(),
+                                    content: format!("Unknown command: /{}", cmd_name),
+                                    is_ephemeral: true,
+                                });
+                            }
                         } else {
                             // Send message to AI
                             send_message(&mut app, terminal, &input).await?;
@@ -405,14 +500,17 @@ fn update_suggestions(app: &mut App) {
     }
 
     let cmd_part = app.input.trim_start_matches('/');
-    let commands = [
-        "help", "provider", "apikey", "model", "chat", "clear", "worker", "theme"
-    ];
+    let registry = CommandRegistry::new();
+    let commands = registry.commands;
 
-    app.suggestions = commands.iter()
-        .filter(|&&c| c.starts_with(cmd_part))
-        .map(|&c| format!("/{}", c))
+    let mut filtered: Vec<String> = commands.iter()
+        .filter(|c| c.name().starts_with(cmd_part) || c.aliases().iter().any(|a| a.starts_with(cmd_part)))
+        .map(|c| format!("{} | {}", c.usage(), c.description()))
         .collect();
+    
+    // Optional: Sort or limit
+    filtered.sort();
+    app.suggestions = filtered;
 }
 
 /// Build the system prompt, injecting worker OS info if available.

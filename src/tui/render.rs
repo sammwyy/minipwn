@@ -3,9 +3,9 @@
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect, Alignment},
-    style::{Modifier, Style},
+    style::{Modifier, Style, Color},
     text::{Line, Span},
-    widgets::{Block, Paragraph, Wrap},
+    widgets::{Paragraph, Wrap, Block, Borders, Clear, List, ListItem, ListState},
 };
 
 use super::app::App;
@@ -21,7 +21,7 @@ pub fn render_ui(f: &mut Frame, app: &App) {
         .constraints([
             Constraint::Length(1), // Title bar
             Constraint::Min(0),    // Chat area
-            Constraint::Length(if !app.suggestions.is_empty() { 3 } else { 2 }), // Floating Input + suggestions
+            Constraint::Length(if !app.suggestions.is_empty() { app.suggestions.len() as u16 + 3 } else { 1 }), // Floating Input + suggestions
             Constraint::Length(1), // Minimal Status bar
         ])
         .split(area);
@@ -36,6 +36,91 @@ pub fn render_ui(f: &mut Frame, app: &App) {
 
     render_input_box(f, chunks[2], app);
     render_status_bar(f, chunks[3], app);
+
+    if app.modal.is_some() {
+        render_modal(f, app);
+    }
+}
+
+fn render_modal(f: &mut Frame, app: &App) {
+    let modal = app.modal.as_ref().unwrap();
+    let area = f.size();
+    
+    // Center the modal
+    let modal_area = centered_rect(60, 60, area);
+    
+    // Clear the background
+    f.render_widget(Clear, modal_area);
+    
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(app.theme.primary()))
+        .title(Span::styled(format!(" {} ", modal.title), Style::default().fg(app.theme.primary()).add_modifier(Modifier::BOLD)))
+        .style(Style::default().bg(app.theme.background()));
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2), // Filter input
+            Constraint::Min(0),    // Item list
+            Constraint::Length(1), // Help
+        ])
+        .margin(1)
+        .split(modal_area);
+
+    // Filter
+    let filter_text = Line::from(vec![
+        Span::styled(" Search: ", Style::default().fg(app.theme.text_dim())),
+        Span::styled(modal.filter.clone(), Style::default().fg(app.theme.text())),
+        Span::styled("█", Style::default().fg(app.theme.primary())),
+    ]);
+    f.render_widget(Paragraph::new(filter_text), chunks[0]);
+
+    // Items
+    let filtered_items: Vec<_> = modal.items.iter()
+        .filter(|i| i.label.to_lowercase().contains(&modal.filter.to_lowercase()))
+        .collect();
+
+    let list_items: Vec<ListItem> = filtered_items.iter().map(|i| {
+        ListItem::new(i.label.as_str()).style(Style::default().fg(app.theme.text()))
+    }).collect();
+
+    let mut state = ListState::default();
+    state.select(Some(modal.selected));
+
+    let list = List::new(list_items)
+        .highlight_style(Style::default().fg(app.theme.primary()).add_modifier(Modifier::BOLD))
+        .highlight_symbol(" ❯ ");
+
+    f.render_stateful_widget(list, chunks[1], &mut state);
+
+    // Help
+    let help = Paragraph::new(" [Enter] Select   [Esc] Cancel   [↑↓] Navigate ")
+        .alignment(Alignment::Center)
+        .style(Style::default().fg(app.theme.text_dim()));
+    f.render_widget(help, chunks[2]);
+
+    f.render_widget(block, modal_area);
+}
+
+fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(r);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(popup_layout[1])[1]
 }
 
 fn render_title_bar(f: &mut Frame, area: Rect, app: &App) {
@@ -102,7 +187,6 @@ fn render_bubbles(f: &mut Frame, area: Rect, app: &App) {
     let inner_area = chat_layout[1];
     
     // We need to calculate the scroll manually since we are rendering multiple widgets
-    let mut total_lines: Vec<Line> = Vec::new();
     let mut bubble_info = Vec::new();
 
     for bubble in &app.bubbles {
@@ -116,31 +200,77 @@ fn render_bubbles(f: &mut Frame, area: Rect, app: &App) {
             ("◈", "MINIPWN", app.theme.assistant_bubble(), app.theme.text())
         };
 
-        let width = inner_area.width as usize;
+        let max_bubble_width = (inner_area.width.saturating_sub(20)) as usize;
+        let is_user = bubble.role == "user";
+
+        let max_text_width = max_bubble_width.saturating_sub(3); // -1 for border, -2 for left/right padding
+
+        let mut wrapped_lines = Vec::new();
+        for content_line in bubble.content.split('\n') {
+            if content_line.is_empty() {
+                wrapped_lines.push(String::new());
+                continue;
+            }
+            let mut line_rest = content_line.to_string();
+            while line_rest.chars().count() > max_text_width {
+                let prefix: String = line_rest.chars().take(max_text_width).collect();
+                if let Some(space_idx) = prefix.rfind(' ') {
+                    if space_idx > 0 {
+                        let (part, rest) = line_rest.split_at(space_idx);
+                        wrapped_lines.push(part.to_string());
+                        line_rest = rest[1..].to_string(); // Skip the space
+                        continue;
+                    } else {
+                        line_rest = line_rest[1..].to_string(); // Strip leading space
+                        continue;
+                    }
+                }
+                // Hard break
+                let part: String = line_rest.chars().take(max_text_width).collect();
+                wrapped_lines.push(part);
+                line_rest = line_rest.chars().skip(max_text_width).collect();
+            }
+            if !line_rest.is_empty() {
+                wrapped_lines.push(line_rest);
+            }
+        }
+
+        let max_line_len = wrapped_lines.iter().map(|l| l.chars().count()).max().unwrap_or(0);
+        let title_len = role_name.chars().count() + icon.chars().count() + 3;
+        
+        let mut actual_bubble_width = std::cmp::max(title_len, max_line_len + 3);
+        actual_bubble_width = std::cmp::min(actual_bubble_width, max_bubble_width);
+
+        let margin_spaces = inner_area.width as usize - actual_bubble_width;
+        let left_margin = if is_user { margin_spaces } else { 0 };
+
+        let left_padding = Span::raw(" ".repeat(left_margin));
 
         let mut lines = vec![
             Line::from(vec![
+                left_padding.clone(),
                 Span::styled(format!(" {} ", icon), Style::default().fg(color)),
                 Span::styled(format!("{} ", role_name), Style::default().fg(color).add_modifier(Modifier::BOLD)),
-                Span::styled("─".repeat(width.saturating_sub(role_name.len() + icon.len() + 3)), Style::default().fg(app.theme.surface())),
+                Span::styled("─".repeat(actual_bubble_width.saturating_sub(title_len)), Style::default().fg(app.theme.surface())),
             ]),
-            Line::from(Span::styled(" ".repeat(width), Style::default().bg(app.theme.surface()))),
         ];
 
         let opacity = if bubble.is_ephemeral { Modifier::ITALIC } else { Modifier::empty() };
-        for content_line in bubble.content.lines() {
-            let mut line_content = format!("    {}", content_line);
-            if line_content.len() < width {
-                line_content.push_str(&" ".repeat(width - line_content.len()));
-            } else {
-                line_content = line_content[..width].to_string(); // Truncate if too long for now
-            }
+        let border_span = Span::styled("▌", Style::default().fg(color).bg(app.theme.background()));
 
+        for wrapped_line in wrapped_lines {
+            let mut line_content = format!(" {} ", wrapped_line);
+            let char_count = line_content.chars().count();
+            if char_count < actual_bubble_width.saturating_sub(1) {
+                line_content.push_str(&" ".repeat(actual_bubble_width.saturating_sub(1) - char_count));
+            }
+            
             lines.push(Line::from(vec![
-                Span::styled(line_content, Style::default().fg(text_color).bg(app.theme.surface()).add_modifier(opacity)),
+                left_padding.clone(),
+                border_span.clone(),
+                Span::styled(line_content, Style::default().fg(text_color).bg(app.theme.background()).add_modifier(opacity)),
             ]));
         }
-        lines.push(Line::from(Span::styled(" ".repeat(width), Style::default().bg(app.theme.surface()))));
         lines.push(Line::from(""));
 
         bubble_info.push(lines);
@@ -188,7 +318,7 @@ fn render_input_box(f: &mut Frame, area: Rect, app: &App) {
         Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(1), // Suggestions
+                Constraint::Length(app.suggestions.len() as u16 + 2), // Suggestions + Borders
                 Constraint::Length(1), // Minimal input line
             ])
             .split(inner_area)
@@ -203,11 +333,21 @@ fn render_input_box(f: &mut Frame, area: Rect, app: &App) {
     };
 
     if !app.suggestions.is_empty() {
-        let suggestion_line = Line::from(vec![
-            Span::styled(" ◈ ", Style::default().fg(app.theme.secondary())),
-            Span::styled(app.suggestions.join("  "), Style::default().fg(app.theme.text_dim())),
-        ]);
-        f.render_widget(Paragraph::new(suggestion_line), chunks[0]);
+        let mut list_items = Vec::new();
+        for suggestion in &app.suggestions {
+            list_items.push(ListItem::new(Line::from(vec![
+                Span::styled(" ◈ ", Style::default().fg(app.theme.secondary())),
+                Span::styled(suggestion.clone(), Style::default().fg(app.theme.text())),
+            ])));
+        }
+        
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(ratatui::widgets::BorderType::Rounded)
+            .border_style(Style::default().fg(app.theme.surface()));
+            
+        let list = List::new(list_items).block(block);
+        f.render_widget(list, chunks[0]);
     }
 
     let prompt = if app.is_thinking { " ▣ " } else { " ❯ " };
@@ -232,7 +372,12 @@ fn render_input_box(f: &mut Frame, area: Rect, app: &App) {
         Span::styled(after.to_string(), Style::default().fg(app.theme.text())),
     ]);
 
-    f.render_widget(Paragraph::new(input_line), chunks[if !app.suggestions.is_empty() { 1 } else { 1 }]);
+    let input_para = Paragraph::new(input_line)
+        .block(Block::default()
+            .borders(Borders::RIGHT)
+            .border_style(Style::default().fg(app.theme.surface())));
+
+    f.render_widget(input_para, chunks[if !app.suggestions.is_empty() { 1 } else { 1 }]);
 }
 
 fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {

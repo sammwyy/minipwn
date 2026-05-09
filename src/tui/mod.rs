@@ -1,12 +1,12 @@
 //! TUI mode entry point and event loop.
 
-mod app;
+pub mod app;
 mod commands;
 mod events;
 mod input;
-mod render;
-mod theme;
-mod worker_select;
+pub mod render;
+pub mod theme;
+pub mod worker_select;
 
 use anyhow::Result;
 use crossterm::{

@@ -31,3 +31,4 @@ thiserror = "=1.0.57"
 chrono = { version = "=0.4.34", features = ["serde"] }
 tracing = "=0.1.40"
 tracing-subscriber = { version = "=0.3.18", features = ["env-filter"] }
+async-trait = "0.1"

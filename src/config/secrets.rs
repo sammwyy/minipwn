@@ -112,8 +112,13 @@ impl Secrets {
             .filter(|s| !s.is_empty())
     }
 
+    /// Set provider-specific secret key.
+    pub fn set_key(&mut self, provider: &Provider, key: &str) {
+        self.values.insert(format!("{}_SECRETKEY", provider.prefix()), key.to_string());
+    }
+
     /// Save all secrets back to disk in KEY="VALUE" format.
-    fn save(&self) -> Result<()> {
+    pub fn save(&self) -> Result<()> {
         let path = secrets_env_path()?;
         let mut lines = Vec::new();
         for (k, v) in &self.values {

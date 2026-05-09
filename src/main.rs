@@ -3,6 +3,7 @@ mod config;
 mod tools;
 mod tui;
 mod worker;
+mod commands;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
