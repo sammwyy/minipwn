@@ -5,10 +5,10 @@ use crossterm::event::{self, Event, KeyCode};
 use ratatui::{
     Terminal,
     backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout},
+    layout::{Constraint, Direction, Layout, Alignment},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, BorderType},
+    widgets::{Block, List, ListItem, ListState, Paragraph},
 };
 use std::io::Stdout;
 
@@ -58,68 +58,63 @@ pub async fn worker_select_screen(
                 ])
                 .split(size);
 
-            // Logo
+            // Centered layout for list
+            let list_layout = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Percentage(20),
+                    Constraint::Percentage(60),
+                    Constraint::Percentage(20),
+                ])
+                .split(chunks[1]);
+
+            // Logo (Monochromatic)
             let logo = Paragraph::new(vec![
-                Line::from(vec![Span::styled(
-                    "  __  __ _       _ ____  _    _ _   _  ",
-                    Style::default()
-                        .fg(theme.primary())
-                        .add_modifier(Modifier::BOLD),
-                )]),
-                Line::from(vec![Span::styled(
-                    " |  \\/  (_)_ __ (_)  _ \\| |  | | \\ | |",
-                    Style::default()
-                        .fg(theme.primary())
-                        .add_modifier(Modifier::BOLD),
-                )]),
-                Line::from(vec![Span::styled(
-                    " | |\\/| | | '_ \\| | |_) | |/\\| |  \\| |",
-                    Style::default()
-                        .fg(theme.primary())
-                        .add_modifier(Modifier::BOLD),
-                )]),
-                Line::from(vec![Span::styled(
-                    " | |  | | | | | | |  __/\\  /\\  / |\\  |",
-                    Style::default()
-                        .fg(theme.primary())
-                        .add_modifier(Modifier::BOLD),
-                )]),
-                Line::from(vec![Span::styled(
-                    " |_|  |_|_|_| |_|_|_|    \\/  \\/|_| \\_|",
-                    Style::default()
-                        .fg(theme.primary())
-                        .add_modifier(Modifier::BOLD),
-                )]),
+                Line::from(""),
+                Line::from(Span::styled("█▀▄▀█ █ █▄░█ █ █▀█ █░█░█ █▄░█", Style::default().fg(theme.primary()))),
+                Line::from(Span::styled("█░▀░█ █ █░▀█ █ █▀▀ ▀▄▀▄▀ █░▀█", Style::default().fg(theme.primary()))),
+                Line::from(""),
+                Line::from(Span::styled("  ◈  Select Execution Environment  ◈  ", Style::default().fg(theme.secondary()).add_modifier(Modifier::ITALIC))),
             ])
-            .alignment(ratatui::layout::Alignment::Center)
-            .block(Block::default());
+            .alignment(Alignment::Center);
             f.render_widget(logo, chunks[0]);
 
             // Worker list
-            let list_items: Vec<ListItem> =
-                items.iter().map(|i| ListItem::new(i.as_str()).style(Style::default().fg(theme.text()))).collect();
+            let list_items: Vec<ListItem> = items.iter().map(|i| {
+                ListItem::new(vec![
+                    Line::from(vec![
+                        Span::styled("  ◈  ", Style::default().fg(theme.text_dim())),
+                        Span::styled(i.as_str(), Style::default().fg(theme.text())),
+                    ])
+                ]).style(Style::default().bg(theme.background()))
+            }).collect();
 
             let list = List::new(list_items)
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .border_type(BorderType::Rounded)
-                        .border_style(Style::default().fg(theme.primary()))
-                        .title(Span::styled(" Select Worker ", Style::default().fg(theme.primary()).add_modifier(Modifier::BOLD))),
-                )
                 .highlight_style(
                     Style::default()
-                        .fg(theme.background())
-                        .bg(theme.primary())
+                        .fg(theme.primary())
+                        .bg(theme.surface())
                         .add_modifier(Modifier::BOLD),
                 )
-                .highlight_symbol("> ");
+                .highlight_symbol(" ❯ ");
 
-            f.render_stateful_widget(list, chunks[1], &mut state);
+            f.render_stateful_widget(list, list_layout[1], &mut state);
 
             // Help
-            let help = Paragraph::new("  [↑↓] Navigate   [Enter] Select   [Ctrl+C] Quit")
-                .style(Style::default().fg(theme.text_dim())).alignment(ratatui::layout::Alignment::Center);
+            let help = Paragraph::new(vec![
+                Line::from(vec![
+                    Span::styled(" ▣ ", Style::default().fg(theme.primary())),
+                    Span::styled("↑↓", Style::default().fg(theme.text())),
+                    Span::styled(" Navigate   ", Style::default().fg(theme.text_dim())),
+                    Span::styled(" ▣ ", Style::default().fg(theme.primary())),
+                    Span::styled("Enter", Style::default().fg(theme.text())),
+                    Span::styled(" Select   ", Style::default().fg(theme.text_dim())),
+                    Span::styled(" ▣ ", Style::default().fg(theme.primary())),
+                    Span::styled("Esc", Style::default().fg(theme.text())),
+                    Span::styled(" Quit", Style::default().fg(theme.text_dim())),
+                ])
+            ])
+            .alignment(Alignment::Center);
             f.render_widget(help, chunks[2]);
         })?;
 
@@ -173,53 +168,77 @@ async fn prompt_new_worker(
             let size = f.size();
             f.render_widget(Block::default().style(Style::default().bg(theme.background())), size);
 
-            let chunks = Layout::default()
+            let main_chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
-                    Constraint::Length(3),
-                    Constraint::Length(3),
-                    Constraint::Length(3),
-                    Constraint::Length(3),
+                    Constraint::Length(5),
                     Constraint::Min(0),
+                    Constraint::Length(3),
                 ])
                 .split(size);
 
-            let (url_style, sec_style, name_style) = match field {
-                Field::Url => (
-                    Style::default().fg(theme.secondary()),
-                    Style::default().fg(theme.text_dim()),
-                    Style::default().fg(theme.text_dim()),
-                ),
-                Field::Secret => (
-                    Style::default().fg(theme.text_dim()),
-                    Style::default().fg(theme.secondary()),
-                    Style::default().fg(theme.text_dim()),
-                ),
-                Field::Name => (
-                    Style::default().fg(theme.text_dim()),
-                    Style::default().fg(theme.text_dim()),
-                    Style::default().fg(theme.secondary()),
-                ),
+            let content_layout = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Percentage(20),
+                    Constraint::Percentage(60),
+                    Constraint::Percentage(20),
+                ])
+                .split(main_chunks[1]);
+
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(2),
+                    Constraint::Length(2),
+                    Constraint::Length(2),
+                    Constraint::Min(0),
+                ])
+                .split(content_layout[1]);
+
+            let header = Paragraph::new(vec![
+                Line::from(""),
+                Line::from(Span::styled(" ◇ NEW WORKER ◇ ", Style::default().fg(theme.primary()).add_modifier(Modifier::BOLD))),
+                Line::from(Span::styled("──────────────────", Style::default().fg(theme.surface()))),
+            ]).alignment(Alignment::Center);
+            f.render_widget(header, main_chunks[0]);
+
+            let (url_p, sec_p, name_p) = match field {
+                Field::Url => (" ❯ ", "   ", "   "),
+                Field::Secret => ("   ", " ❯ ", "   "),
+                Field::Name => ("   ", "   ", " ❯ "),
             };
 
-            let url_input = Paragraph::new(format!("URL: {}", url))
-                .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(" Worker URL "))
-                .style(url_style);
-            f.render_widget(url_input, chunks[0]);
+            let url_line = Line::from(vec![
+                Span::styled(url_p, Style::default().fg(theme.primary())),
+                Span::styled("URL: ", Style::default().fg(theme.text_dim())),
+                Span::styled(url.clone(), Style::default().fg(theme.text())),
+            ]);
+            f.render_widget(Paragraph::new(url_line), chunks[0]);
 
-            let sec_input = Paragraph::new(format!("Secret: {}", secret))
-                .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(" Secret "))
-                .style(sec_style);
-            f.render_widget(sec_input, chunks[1]);
+            let sec_line = Line::from(vec![
+                Span::styled(sec_p, Style::default().fg(theme.primary())),
+                Span::styled("SECRET: ", Style::default().fg(theme.text_dim())),
+                Span::styled("*".repeat(secret.len()), Style::default().fg(theme.text())),
+            ]);
+            f.render_widget(Paragraph::new(sec_line), chunks[1]);
 
-            let name_input = Paragraph::new(format!("Name: {}", name))
-                .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(" Name "))
-                .style(name_style);
-            f.render_widget(name_input, chunks[2]);
+            let name_line = Line::from(vec![
+                Span::styled(name_p, Style::default().fg(theme.primary())),
+                Span::styled("NAME: ", Style::default().fg(theme.text_dim())),
+                Span::styled(name.clone(), Style::default().fg(theme.text())),
+            ]);
+            f.render_widget(Paragraph::new(name_line), chunks[2]);
 
-            let help = Paragraph::new("[Enter] Next field / Confirm   [Esc] Cancel")
-                .style(Style::default().fg(theme.text_dim()));
-            f.render_widget(help, chunks[3]);
+            let help = Paragraph::new(vec![
+                Line::from(vec![
+                    Span::styled(" [Enter] ", Style::default().fg(theme.primary())),
+                    Span::styled("Next/Confirm   ", Style::default().fg(theme.text_dim())),
+                    Span::styled(" [Esc] ", Style::default().fg(theme.primary())),
+                    Span::styled("Cancel", Style::default().fg(theme.text_dim())),
+                ])
+            ]).alignment(Alignment::Center);
+            f.render_widget(help, main_chunks[2]);
         })?;
 
         if event::poll(std::time::Duration::from_millis(100))? {

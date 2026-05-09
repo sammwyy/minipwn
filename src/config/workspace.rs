@@ -13,7 +13,7 @@ const STATS_TOML: &str = "stats.toml";
 pub const SYSTEM_PROMPT_FILE: &str = "system_prompt.md";
 
 /// Default system prompt embedded at compile time.
-pub const DEFAULT_SYSTEM_PROMPT: &str = include_str!("../system_prompt.md");
+pub const DEFAULT_SYSTEM_PROMPT: &str = include_str!("../../data/system_prompt.md");
 
 /// workspace.toml schema.
 #[derive(Debug, Clone, Serialize, Deserialize)]

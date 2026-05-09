@@ -241,8 +241,3 @@ pub struct SimpleResponse {
     pub message: Option<String>,
 }
 
-fn hostname() -> String {
-    std::env::var("HOSTNAME")
-        .or_else(|_| std::env::var("COMPUTERNAME"))
-        .unwrap_or_else(|_| "unknown".to_string())
-}

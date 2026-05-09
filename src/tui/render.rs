@@ -1,11 +1,11 @@
-//! TUI rendering: chat bubbles, input box, status bar.
+//! TUI rendering: minimalist, centered chat bubbles with fixed-width backgrounds.
 
 use ratatui::{
     Frame,
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Layout, Rect, Alignment},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap, BorderType},
+    widgets::{Block, Paragraph, Wrap},
 };
 
 use super::app::App;
@@ -14,17 +14,15 @@ use super::app::App;
 pub fn render_ui(f: &mut Frame, app: &App) {
     let area = f.size();
     
-    // Fill background
-    let bg_block = Block::default().style(Style::default().bg(app.theme.background()));
-    f.render_widget(bg_block, area);
+    // No global background as requested
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1), // Title bar
             Constraint::Min(0),    // Chat area
-            Constraint::Length(if !app.suggestions.is_empty() { 4 } else { 3 }), // Input box + suggestions
-            Constraint::Length(1), // Status bar
+            Constraint::Length(if !app.suggestions.is_empty() { 3 } else { 2 }), // Floating Input + suggestions
+            Constraint::Length(1), // Minimal Status bar
         ])
         .split(area);
 
@@ -41,21 +39,44 @@ pub fn render_ui(f: &mut Frame, app: &App) {
 }
 
 fn render_title_bar(f: &mut Frame, area: Rect, app: &App) {
-    let title = format!(" MINIPWN v0.1.0 — {} ", app.chat_id);
-    let p = Paragraph::new(Line::from(vec![
-        Span::styled(title, Style::default().fg(app.theme.background()).bg(app.theme.primary()).add_modifier(Modifier::BOLD)),
-        Span::styled(format!(" [Mode: {}] ", match &app.execution_mode {
-            crate::tools::ExecutionMode::Local { .. } => "Local",
-            crate::tools::ExecutionMode::Remote { .. } => "Remote",
-        }), Style::default().fg(app.theme.primary()).bg(app.theme.surface())),
-        Span::styled(format!(" [Tokens: {}] ", app.stats.total_tokens), Style::default().fg(app.theme.secondary()).bg(app.theme.surface())),
-    ])).style(Style::default().bg(app.theme.surface()));
+    let title_span = Span::styled(
+        format!(" ▣ MINIPWN v0.1.0 "),
+        Style::default().fg(app.theme.primary()).add_modifier(Modifier::BOLD)
+    );
+    
+    let chat_span = Span::styled(
+        format!(" • {} ", app.chat_id),
+        Style::default().fg(app.theme.text_dim())
+    );
+
+    let tokens_span = Span::styled(
+        format!(" • {} [T] ", app.stats.total_tokens),
+        Style::default().fg(app.theme.secondary())
+    );
+
+    let p = Paragraph::new(Line::from(vec![title_span, chat_span, tokens_span]))
+        .alignment(Alignment::Center);
     f.render_widget(p, area);
 }
 
-/// Render the welcome / empty state screen.
 fn render_welcome(f: &mut Frame, area: Rect, app: &App) {
-    let center_chunks = Layout::default()
+    let logo_lines = vec![
+        Line::from(""),
+        Line::from(Span::styled("█▀▄▀█ █ █▄░█ █ █▀█ █░█░█ █▄░█", Style::default().fg(app.theme.primary()))),
+        Line::from(Span::styled("█░▀░█ █ █░▀█ █ █▀▀ ▀▄▀▄▀ █░▀█", Style::default().fg(app.theme.primary()))),
+        Line::from(""),
+        Line::from(Span::styled("  ◈  Autonomous Pentesting ◈  ", Style::default().fg(app.theme.secondary()).add_modifier(Modifier::ITALIC))),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Type ", Style::default().fg(app.theme.text_dim())),
+            Span::styled("/help", Style::default().fg(app.theme.primary())),
+            Span::styled(" to see available commands.", Style::default().fg(app.theme.text_dim())),
+        ]),
+    ];
+
+    let welcome = Paragraph::new(logo_lines).alignment(Alignment::Center);
+    
+    let vertical_center = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Percentage(30),
@@ -64,211 +85,146 @@ fn render_welcome(f: &mut Frame, area: Rect, app: &App) {
         ])
         .split(area);
 
-    let logo_lines = vec![
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            "  __  __ _       _ ____  _    _ _   _  ",
-            Style::default()
-                .fg(app.theme.primary())
-                .add_modifier(Modifier::BOLD),
-        )]),
-        Line::from(vec![Span::styled(
-            " |  \\/  (_)_ __ (_)  _ \\| |  | | \\ | |",
-            Style::default()
-                .fg(app.theme.primary())
-                .add_modifier(Modifier::BOLD),
-        )]),
-        Line::from(vec![Span::styled(
-            " | |\\/| | | '_ \\| | |_) | |/\\| |  \\| |",
-            Style::default()
-                .fg(app.theme.primary())
-                .add_modifier(Modifier::BOLD),
-        )]),
-        Line::from(vec![Span::styled(
-            " | |  | | | | | | |  __/\\  /\\  / |\\  |",
-            Style::default()
-                .fg(app.theme.primary())
-                .add_modifier(Modifier::BOLD),
-        )]),
-        Line::from(vec![Span::styled(
-            " |_|  |_|_|_| |_|_|_|    \\/  \\/|_| \\_|",
-            Style::default()
-                .fg(app.theme.primary())
-                .add_modifier(Modifier::BOLD),
-        )]),
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            "  Autonomous Pentesting Agent",
-            Style::default().fg(app.theme.text_dim()),
-        )]),
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            "  Ask me anything. Type /help for commands.",
-            Style::default().fg(app.theme.text()),
-        )]),
-    ];
-
-    let welcome = Paragraph::new(logo_lines).alignment(ratatui::layout::Alignment::Center);
-    f.render_widget(welcome, center_chunks[1]);
+    f.render_widget(welcome, vertical_center[1]);
 }
 
-/// Render chat bubbles with role-based colors.
 fn render_bubbles(f: &mut Frame, area: Rect, app: &App) {
-    let mut lines: Vec<Line> = Vec::new();
+    // Center the conversation
+    let chat_layout = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(10),
+            Constraint::Percentage(80),
+            Constraint::Percentage(10),
+        ])
+        .split(area);
+
+    let inner_area = chat_layout[1];
+    
+    // We need to calculate the scroll manually since we are rendering multiple widgets
+    let mut total_lines: Vec<Line> = Vec::new();
+    let mut bubble_info = Vec::new();
 
     for bubble in &app.bubbles {
-        if bubble.role == "tool" {
-            // Render tool result beautifully
-            let success = bubble.content.contains("OK");
-            let color = if success { app.theme.success() } else { app.theme.error() };
-
-            lines.push(Line::from(vec![Span::styled(
-                " 🛠 TOOL RESULT ",
-                Style::default().fg(app.theme.background()).bg(color).add_modifier(Modifier::BOLD),
-            )]));
-            
-            let block_style = Style::default().fg(color);
-            lines.push(Line::from(vec![Span::styled(" ╭──────────────────────────────────", block_style)]));
-            for content_line in bubble.content.lines() {
-                 lines.push(Line::from(vec![
-                    Span::styled(" │ ", block_style),
-                    Span::styled(content_line, Style::default().fg(app.theme.text())),
-                 ]));
-            }
-            lines.push(Line::from(vec![Span::styled(" ╰──────────────────────────────────", block_style)]));
-            lines.push(Line::from(""));
-            continue;
-        }
-
-        let (prefix, color) = match bubble.role.as_str() {
-            "user" => (" YOU ", app.theme.user_bubble()),
-            "assistant" => (" MINIPWN ", app.theme.assistant_bubble()),
-            _ => (" ? ", app.theme.text()),
-        };
-
-        let style_bg = if bubble.is_ephemeral {
-            app.theme.surface()
+        let (icon, role_name, color, text_color) = if bubble.role == "tool" {
+            ("◆", "TOOL RESULT", if bubble.content.contains("OK") { app.theme.success() } else { app.theme.error() }, app.theme.text())
+        } else if bubble.role == "user" {
+            ("◇", "YOU", app.theme.user_bubble(), app.theme.text())
+        } else if bubble.is_ephemeral {
+            ("»", "COMMAND", app.theme.secondary(), app.theme.text_dim())
         } else {
-            app.theme.background()
+            ("◈", "MINIPWN", app.theme.assistant_bubble(), app.theme.text())
         };
 
-        // Role header
-        lines.push(Line::from(vec![Span::styled(
-            prefix,
-            Style::default()
-                .fg(app.theme.background())
-                .bg(color)
-                .add_modifier(Modifier::BOLD),
-        )]));
+        let width = inner_area.width as usize;
 
-        // Content lines
+        let mut lines = vec![
+            Line::from(vec![
+                Span::styled(format!(" {} ", icon), Style::default().fg(color)),
+                Span::styled(format!("{} ", role_name), Style::default().fg(color).add_modifier(Modifier::BOLD)),
+                Span::styled("─".repeat(width.saturating_sub(role_name.len() + icon.len() + 3)), Style::default().fg(app.theme.surface())),
+            ]),
+            Line::from(Span::styled(" ".repeat(width), Style::default().bg(app.theme.surface()))),
+        ];
+
+        let opacity = if bubble.is_ephemeral { Modifier::ITALIC } else { Modifier::empty() };
         for content_line in bubble.content.lines() {
-            // Highlight tool calls within assistant messages
-            if bubble.role == "assistant" && content_line.contains("<tool_call>") {
-                 lines.push(Line::from(vec![
-                    Span::styled("  ", Style::default()),
-                    Span::styled(content_line, Style::default().fg(app.theme.secondary()).bg(style_bg).add_modifier(Modifier::BOLD)),
-                 ]));
+            let mut line_content = format!("    {}", content_line);
+            if line_content.len() < width {
+                line_content.push_str(&" ".repeat(width - line_content.len()));
             } else {
-                lines.push(Line::from(vec![Span::styled(
-                    format!("  {}", content_line),
-                    Style::default().fg(app.theme.text()).bg(style_bg),
-                )]));
+                line_content = line_content[..width].to_string(); // Truncate if too long for now
             }
+
+            lines.push(Line::from(vec![
+                Span::styled(line_content, Style::default().fg(text_color).bg(app.theme.surface()).add_modifier(opacity)),
+            ]));
         }
-
+        lines.push(Line::from(Span::styled(" ".repeat(width), Style::default().bg(app.theme.surface()))));
         lines.push(Line::from(""));
+
+        bubble_info.push(lines);
     }
 
-    // Thinking indicator
     if app.is_thinking {
-        lines.push(Line::from(vec![Span::styled(
-            " MINIPWN ",
-            Style::default()
-                .fg(app.theme.background())
-                .bg(app.theme.assistant_bubble())
-                .add_modifier(Modifier::BOLD),
-        )]));
-        lines.push(Line::from(vec![Span::styled(
-            "  Thinking...",
-            Style::default()
-                .fg(app.theme.text_dim())
-                .add_modifier(Modifier::ITALIC),
-        )]));
-        lines.push(Line::from(""));
+        bubble_info.push(vec![
+            Line::from(vec![
+                Span::styled(" ◈ ", Style::default().fg(app.theme.assistant_bubble())),
+                Span::styled("MINIPWN is thinking", Style::default().fg(app.theme.assistant_bubble()).add_modifier(Modifier::ITALIC)),
+                Span::styled(" ...", Style::default().fg(app.theme.assistant_bubble())),
+            ]),
+            Line::from(""),
+        ]);
     }
 
-    let content_height = lines.len() as u16;
-    let view_height = area.height;
-
-    // Auto-scroll to bottom unless user scrolled up
+    // Flatten to count total lines for scrolling
+    let all_lines: Vec<Line> = bubble_info.iter().flatten().cloned().collect();
+    let content_height = all_lines.len() as u16;
+    let view_height = inner_area.height;
     let max_scroll = content_height.saturating_sub(view_height);
     let scroll = max_scroll.saturating_sub(app.scroll_offset);
 
-    let paragraph = Paragraph::new(lines)
-        .block(Block::default().style(Style::default().bg(app.theme.background())))
+    // Render using a single Paragraph to ensure background fills width correctly
+    let paragraph = Paragraph::new(all_lines)
         .scroll((scroll, 0))
         .wrap(Wrap { trim: false });
 
-    f.render_widget(paragraph, area);
+    f.render_widget(paragraph, inner_area);
 }
 
-/// Render the text input box and suggestions.
 fn render_input_box(f: &mut Frame, area: Rect, app: &App) {
+    let input_layout = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(15),
+            Constraint::Percentage(70),
+            Constraint::Percentage(15),
+        ])
+        .split(area);
+
+    let inner_area = input_layout[1];
+
     let chunks = if !app.suggestions.is_empty() {
         Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(1), // Suggestions
-                Constraint::Length(3), // Input box
+                Constraint::Length(1), // Minimal input line
             ])
-            .split(area)
+            .split(inner_area)
     } else {
         Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Min(0),
-                Constraint::Length(3),
+                Constraint::Length(1),
             ])
-            .split(area)
+            .split(inner_area)
     };
 
     if !app.suggestions.is_empty() {
         let suggestion_line = Line::from(vec![
-            Span::styled(" Suggestions: ", Style::default().fg(app.theme.text_dim())),
-            Span::styled(app.suggestions.join("  "), Style::default().fg(app.theme.secondary()).add_modifier(Modifier::BOLD)),
+            Span::styled(" ◈ ", Style::default().fg(app.theme.secondary())),
+            Span::styled(app.suggestions.join("  "), Style::default().fg(app.theme.text_dim())),
         ]);
         f.render_widget(Paragraph::new(suggestion_line), chunks[0]);
     }
 
-    let input_area = if !app.suggestions.is_empty() { chunks[1] } else { chunks[1] };
-
-    let label = if app.is_thinking {
-        " Thinking... "
-    } else {
-        " Message "
-    };
-
-    // Show cursor as a block character at cursor position
+    let prompt = if app.is_thinking { " ▣ " } else { " ❯ " };
     let before = &app.input[..app.cursor];
     let cursor_char = app.input.chars().nth(app.cursor).unwrap_or(' ');
     let after = if app.cursor < app.input.len() {
         let next = app.cursor + cursor_char.len_utf8();
-        if next <= app.input.len() {
-             &app.input[next..]
-        } else {
-            ""
-        }
-    } else {
-        ""
-    };
+        if next <= app.input.len() { &app.input[next..] } else { "" }
+    } else { "" };
 
-    let text = Line::from(vec![
+    let input_line = Line::from(vec![
+        Span::styled(prompt, Style::default().fg(app.theme.primary()).add_modifier(Modifier::BOLD)),
         Span::styled(before.to_string(), Style::default().fg(app.theme.text())),
         Span::styled(
             cursor_char.to_string(),
             if !app.is_thinking {
-                Style::default().fg(app.theme.background()).bg(app.theme.text())
+                Style::default().bg(app.theme.text()) // Use default BG for cursor contrast
             } else {
                 Style::default()
             },
@@ -276,31 +232,22 @@ fn render_input_box(f: &mut Frame, area: Rect, app: &App) {
         Span::styled(after.to_string(), Style::default().fg(app.theme.text())),
     ]);
 
-    let input = Paragraph::new(text).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .title(Span::styled(label, Style::default().fg(app.theme.title()).add_modifier(Modifier::BOLD)))
-            .border_style(Style::default().fg(app.theme.border())),
-    ).style(Style::default().bg(app.theme.background()));
-    
-    f.render_widget(input, input_area);
+    f.render_widget(Paragraph::new(input_line), chunks[if !app.suggestions.is_empty() { 1 } else { 1 }]);
 }
 
-/// Render the bottom status bar.
 fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
-    let status_text = if app.status.is_empty() {
-        format!(
-            " chat:{} | provider:{} | theme:{} | Ctrl+C quit | PgUp/PgDn scroll",
-            app.chat_id,
-            app.provider.display_name(),
-            app.theme.name,
-        )
-    } else {
-        format!(" {}", app.status)
+    let mode = match &app.execution_mode {
+        crate::tools::ExecutionMode::Local { .. } => "◈ LOCAL",
+        crate::tools::ExecutionMode::Remote { .. } => "◈ REMOTE",
     };
 
-    let status = Paragraph::new(status_text)
-        .style(Style::default().fg(app.theme.text_dim()).bg(app.theme.surface()));
-    f.render_widget(status, area);
+    let status_line = Line::from(vec![
+        Span::styled(format!("  {}  ", mode), Style::default().fg(app.theme.primary()).bg(app.theme.surface())),
+        Span::styled(format!("  {}  ", app.provider.display_name().to_uppercase()), Style::default().fg(app.theme.text_dim())),
+        Span::styled(format!("  {}  ", app.theme.name.to_uppercase()), Style::default().fg(app.theme.text_dim())),
+        Span::styled("  press / for commands  ", Style::default().fg(app.theme.text_dim()).add_modifier(Modifier::ITALIC)),
+    ]);
+
+    let p = Paragraph::new(status_line).alignment(Alignment::Right);
+    f.render_widget(p, area);
 }

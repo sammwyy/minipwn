@@ -41,13 +41,13 @@ impl Theme {
     pub fn text(&self) -> Color { self.get_color(&self.colors.text) }
     pub fn text_dim(&self) -> Color { self.get_color(&self.colors.text_dim) }
     pub fn success(&self) -> Color { self.get_color(&self.colors.success) }
-    pub fn warning(&self) -> Color { self.get_color(&self.colors.warning) }
+    // pub fn warning(&self) -> Color { self.get_color(&self.colors.warning) }
     pub fn error(&self) -> Color { self.get_color(&self.colors.error) }
     pub fn user_bubble(&self) -> Color { self.get_color(&self.colors.user_bubble) }
     pub fn assistant_bubble(&self) -> Color { self.get_color(&self.colors.assistant_bubble) }
-    pub fn tool_bubble(&self) -> Color { self.get_color(&self.colors.tool_bubble) }
-    pub fn border(&self) -> Color { self.get_color(&self.colors.border) }
-    pub fn title(&self) -> Color { self.get_color(&self.colors.title) }
+    // pub fn tool_bubble(&self) -> Color { self.get_color(&self.colors.tool_bubble) }
+    // pub fn border(&self) -> Color { self.get_color(&self.colors.border) }
+    // pub fn title(&self) -> Color { self.get_color(&self.colors.title) }
 }
 
 fn parse_color(s: &str) -> Option<Color> {
