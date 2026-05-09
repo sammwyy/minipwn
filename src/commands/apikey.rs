@@ -12,7 +12,7 @@ impl Command for ApiKeyCommand {
     fn description(&self) -> &str { "Set API key for current provider" }
     fn usage(&self) -> &str { "/apikey <key>" }
 
-    async fn execute(&self, app: &mut App, args: &[&str]) -> Result<String> {
+    async fn execute(&self, app: &mut App, _name: &str, args: &[&str]) -> Result<String> {
         if args.is_empty() || args[0].is_empty() {
             return Ok("Usage: /apikey <key>".to_string());
         }

@@ -12,7 +12,7 @@ impl Command for WorkerCommand {
     fn description(&self) -> &str { "Manage remote workers" }
     fn usage(&self) -> &str { "/worker | list | add <url> <secret> [name]" }
 
-    async fn execute(&self, app: &mut App, args: &[&str]) -> Result<String> {
+    async fn execute(&self, app: &mut App, _name: &str, args: &[&str]) -> Result<String> {
         if args.is_empty() || args[0].is_empty() || args[0] == "list" {
             let list = load_workers_list().unwrap_or_default();
             let current = match &app.execution_mode {

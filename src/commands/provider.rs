@@ -14,7 +14,7 @@ impl Command for ProviderCommand {
     fn description(&self) -> &str { "Change AI provider" }
     fn usage(&self) -> &str { "/provider [id]" }
 
-    async fn execute(&self, app: &mut App, args: &[&str]) -> Result<String> {
+    async fn execute(&self, app: &mut App, _name: &str, args: &[&str]) -> Result<String> {
         if !args.is_empty() && !args[0].is_empty() {
             let provider_id = args[0];
             if let Some(p) = Provider::from_str(provider_id) {

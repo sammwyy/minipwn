@@ -268,7 +268,7 @@ pub async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Resul
 
                             let registry = CommandRegistry::new();
                             if let Some(cmd) = registry.find(cmd_name) {
-                                match cmd.execute(&mut app, args).await {
+                                match cmd.execute(&mut app, cmd_name, args).await {
                                     Ok(result) => {
                                         if !result.is_empty() {
                                             app.bubbles.push(Bubble {
@@ -563,12 +563,16 @@ async fn send_message(
             if brief.chars().count() > 32 {
                 brief = format!("{}...", brief.chars().take(32).collect::<String>());
             }
-            
+
+            let secs = elapsed.as_secs();
+            let ms = elapsed.subsec_millis();
+            let time_str = format!("{:02}:{:02}.{:03}", secs / 60, secs % 60, ms);
+
             let status_prefix = if result.success { "Success:" } else { "Error:" };
             
             app.bubbles[tool_bubble_idx].content = format!(
-                "{}: {}\n{} {}",
-                nice_tool_name, cmd_text, status_prefix, brief
+                "{}: {}\n{} {} ({})",
+                nice_tool_name, cmd_text, status_prefix, brief, time_str
             );
 
             // Feed result back to AI
@@ -630,7 +634,7 @@ fn update_suggestions(app: &mut App) {
 
 /// Build the system prompt, injecting worker OS info if available.
 async fn build_system_prompt(app: &App) -> String {
-    let base = load_system_prompt();
+    let base = load_system_prompt(&app.meta.mode);
 
     let worker_info = match &app.execution_mode {
         ExecutionMode::Remote { client, .. } => match client.get_info().await {

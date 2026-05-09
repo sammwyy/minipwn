@@ -14,7 +14,7 @@ impl Command for ChatCommand {
     fn description(&self) -> &str { "Switch chat session" }
     fn usage(&self) -> &str { "/chat [id]" }
 
-    async fn execute(&self, app: &mut App, args: &[&str]) -> Result<String> {
+    async fn execute(&self, app: &mut App, _name: &str, args: &[&str]) -> Result<String> {
         if !args.is_empty() && !args[0].is_empty() {
             let chat_id = args[0].to_string();
             app.chat_id = chat_id.clone();

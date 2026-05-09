@@ -19,7 +19,7 @@ pub struct WorkerClient {
 pub struct WorkerInfo {
     pub os: String,
     pub arch: String,
-    pub family: String,
+    // pub family: String,
     pub hostname: String,
     pub cwd: String,
 }

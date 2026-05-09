@@ -12,7 +12,7 @@ impl Command for ThemeCommand {
     fn description(&self) -> &str { "Change UI theme" }
     fn usage(&self) -> &str { "/theme <id>" }
 
-    async fn execute(&self, app: &mut App, args: &[&str]) -> Result<String> {
+    async fn execute(&self, app: &mut App, _name: &str, args: &[&str]) -> Result<String> {
         if args.is_empty() || args[0].is_empty() {
             let themes = app.theme_registry.list();
             let mut list = String::from("Available themes:\n");

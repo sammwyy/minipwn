@@ -1,7 +1,6 @@
 //! TUI mode entry point and event loop.
 
 pub mod app;
-mod commands;
 mod events;
 mod input;
 pub mod render;
@@ -17,7 +16,6 @@ use crossterm::{
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use std::io;
-
 
 /// Launch the TUI.
 pub async fn run() -> Result<()> {

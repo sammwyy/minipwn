@@ -2,10 +2,10 @@
 
 use ratatui::{
     Frame,
-    layout::{Constraint, Direction, Layout, Rect, Alignment},
-    style::{Modifier, Style, Color},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Paragraph, Wrap, Block, Borders, Clear, List, ListItem, ListState},
+    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
 
 use super::app::App;
@@ -13,7 +13,7 @@ use super::app::App;
 /// Main render function called every frame.
 pub fn render_ui(f: &mut Frame, app: &App) {
     let area = f.size();
-    
+
     // No global background as requested
 
     let chunks = Layout::default()
@@ -21,13 +21,17 @@ pub fn render_ui(f: &mut Frame, app: &App) {
         .constraints([
             Constraint::Length(1), // Title bar
             Constraint::Min(0),    // Chat area
-            Constraint::Length(if !app.suggestions.is_empty() { app.suggestions.len() as u16 + 3 } else { 1 }), // Floating Input + suggestions
+            Constraint::Length(if !app.suggestions.is_empty() {
+                app.suggestions.len() as u16 + 3
+            } else {
+                1
+            }), // Floating Input + suggestions
             Constraint::Length(1), // Minimal Status bar
         ])
         .split(area);
 
     render_title_bar(f, chunks[0], app);
-    
+
     if app.bubbles.is_empty() {
         render_welcome(f, chunks[1], app);
     } else {
@@ -45,17 +49,22 @@ pub fn render_ui(f: &mut Frame, app: &App) {
 fn render_modal(f: &mut Frame, app: &App) {
     let modal = app.modal.as_ref().unwrap();
     let area = f.size();
-    
+
     // Center the modal
     let modal_area = centered_rect(60, 60, area);
-    
+
     // Clear the background
     f.render_widget(Clear, modal_area);
-    
+
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(app.theme.primary()))
-        .title(Span::styled(format!(" {} ", modal.title), Style::default().fg(app.theme.primary()).add_modifier(Modifier::BOLD)))
+        .title(Span::styled(
+            format!(" {} ", modal.title),
+            Style::default()
+                .fg(app.theme.primary())
+                .add_modifier(Modifier::BOLD),
+        ))
         .style(Style::default().bg(app.theme.background()));
 
     let chunks = Layout::default()
@@ -77,19 +86,30 @@ fn render_modal(f: &mut Frame, app: &App) {
     f.render_widget(Paragraph::new(filter_text), chunks[0]);
 
     // Items
-    let filtered_items: Vec<_> = modal.items.iter()
-        .filter(|i| i.label.to_lowercase().contains(&modal.filter.to_lowercase()))
+    let filtered_items: Vec<_> = modal
+        .items
+        .iter()
+        .filter(|i| {
+            i.label
+                .to_lowercase()
+                .contains(&modal.filter.to_lowercase())
+        })
         .collect();
 
-    let list_items: Vec<ListItem> = filtered_items.iter().map(|i| {
-        ListItem::new(i.label.as_str()).style(Style::default().fg(app.theme.text()))
-    }).collect();
+    let list_items: Vec<ListItem> = filtered_items
+        .iter()
+        .map(|i| ListItem::new(i.label.as_str()).style(Style::default().fg(app.theme.text())))
+        .collect();
 
     let mut state = ListState::default();
     state.select(Some(modal.selected));
 
     let list = List::new(list_items)
-        .highlight_style(Style::default().fg(app.theme.primary()).add_modifier(Modifier::BOLD))
+        .highlight_style(
+            Style::default()
+                .fg(app.theme.primary())
+                .add_modifier(Modifier::BOLD),
+        )
         .highlight_symbol(" ❯ ");
 
     f.render_stateful_widget(list, chunks[1], &mut state);
@@ -126,41 +146,72 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
 fn render_title_bar(f: &mut Frame, area: Rect, app: &App) {
     let title_span = Span::styled(
         format!(" ▣ MINIPWN v0.1.0 "),
-        Style::default().fg(app.theme.primary()).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(app.theme.primary())
+            .add_modifier(Modifier::BOLD),
     );
-    
+
     let chat_span = Span::styled(
         format!(" • {} ", app.chat_id),
-        Style::default().fg(app.theme.text_dim())
+        Style::default().fg(app.theme.text_dim()),
+    );
+
+    let mode_color = if app.meta.mode == "safe" {
+        app.theme.success()
+    } else {
+        app.theme.error()
+    };
+    let mode_span = Span::styled(
+        format!(" • {} ", app.meta.mode.to_uppercase()),
+        Style::default().fg(mode_color).add_modifier(Modifier::BOLD),
     );
 
     let tokens_span = Span::styled(
         format!(" • {} [T] ", app.stats.total_tokens),
-        Style::default().fg(app.theme.secondary())
+        Style::default().fg(app.theme.secondary()),
     );
 
-    let p = Paragraph::new(Line::from(vec![title_span, chat_span, tokens_span]))
-        .alignment(Alignment::Center);
+    let p = Paragraph::new(Line::from(vec![
+        title_span,
+        chat_span,
+        mode_span,
+        tokens_span,
+    ]))
+    .alignment(Alignment::Center);
     f.render_widget(p, area);
 }
 
 fn render_welcome(f: &mut Frame, area: Rect, app: &App) {
     let logo_lines = vec![
         Line::from(""),
-        Line::from(Span::styled("█▀▄▀█ █ █▄░█ █ █▀█ █░█░█ █▄░█", Style::default().fg(app.theme.primary()))),
-        Line::from(Span::styled("█░▀░█ █ █░▀█ █ █▀▀ ▀▄▀▄▀ █░▀█", Style::default().fg(app.theme.primary()))),
+        Line::from(Span::styled(
+            "█▀▄▀█ █ █▄░█ █ █▀█ █░█░█ █▄░█",
+            Style::default().fg(app.theme.primary()),
+        )),
+        Line::from(Span::styled(
+            "█░▀░█ █ █░▀█ █ █▀▀ ▀▄▀▄▀ █░▀█",
+            Style::default().fg(app.theme.primary()),
+        )),
         Line::from(""),
-        Line::from(Span::styled("  ◈  Autonomous Pentesting ◈  ", Style::default().fg(app.theme.secondary()).add_modifier(Modifier::ITALIC))),
+        Line::from(Span::styled(
+            "  ◈  Autonomous Pentesting ◈  ",
+            Style::default()
+                .fg(app.theme.secondary())
+                .add_modifier(Modifier::ITALIC),
+        )),
         Line::from(""),
         Line::from(vec![
             Span::styled("Type ", Style::default().fg(app.theme.text_dim())),
             Span::styled("/help", Style::default().fg(app.theme.primary())),
-            Span::styled(" to see available commands.", Style::default().fg(app.theme.text_dim())),
+            Span::styled(
+                " to see available commands.",
+                Style::default().fg(app.theme.text_dim()),
+            ),
         ]),
     ];
 
     let welcome = Paragraph::new(logo_lines).alignment(Alignment::Center);
-    
+
     let vertical_center = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -185,7 +236,7 @@ fn render_bubbles(f: &mut Frame, area: Rect, app: &App) {
         .split(area);
 
     let inner_area = chat_layout[1];
-    
+
     // We need to calculate the scroll manually since we are rendering multiple widgets
     let mut bubble_info = Vec::new();
 
@@ -204,7 +255,12 @@ fn render_bubbles(f: &mut Frame, area: Rect, app: &App) {
         } else if bubble.is_ephemeral {
             ("»", "COMMAND", app.theme.secondary(), app.theme.text_dim())
         } else {
-            ("◈", "MINIPWN", app.theme.assistant_bubble(), app.theme.text())
+            (
+                "◈",
+                "MINIPWN",
+                app.theme.assistant_bubble(),
+                app.theme.text(),
+            )
         };
 
         let max_bubble_width = (inner_area.width.saturating_sub(20)) as usize;
@@ -242,9 +298,13 @@ fn render_bubbles(f: &mut Frame, area: Rect, app: &App) {
             }
         }
 
-        let max_line_len = wrapped_lines.iter().map(|l| l.chars().count()).max().unwrap_or(0);
+        let max_line_len = wrapped_lines
+            .iter()
+            .map(|l| l.chars().count())
+            .max()
+            .unwrap_or(0);
         let title_len = role_name.chars().count() + icon.chars().count() + 3;
-        
+
         let mut actual_bubble_width = std::cmp::max(title_len, max_line_len + 3);
         actual_bubble_width = std::cmp::min(actual_bubble_width, max_bubble_width);
 
@@ -253,29 +313,44 @@ fn render_bubbles(f: &mut Frame, area: Rect, app: &App) {
 
         let left_padding = Span::raw(" ".repeat(left_margin));
 
-        let mut lines = vec![
-            Line::from(vec![
-                left_padding.clone(),
-                Span::styled(format!(" {} ", icon), Style::default().fg(color)),
-                Span::styled(format!("{} ", role_name), Style::default().fg(color).add_modifier(Modifier::BOLD)),
-                Span::styled("─".repeat(actual_bubble_width.saturating_sub(title_len)), Style::default().fg(app.theme.surface())),
-            ]),
-        ];
+        let mut lines = vec![Line::from(vec![
+            left_padding.clone(),
+            Span::styled(format!(" {} ", icon), Style::default().fg(color)),
+            Span::styled(
+                format!("{} ", role_name),
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "─".repeat(actual_bubble_width.saturating_sub(title_len)),
+                Style::default().fg(app.theme.surface()),
+            ),
+        ])];
 
-        let opacity = if bubble.is_ephemeral { Modifier::ITALIC } else { Modifier::empty() };
+        let opacity = if bubble.is_ephemeral {
+            Modifier::ITALIC
+        } else {
+            Modifier::empty()
+        };
         let border_span = Span::styled("▌", Style::default().fg(color).bg(app.theme.background()));
 
         for wrapped_line in wrapped_lines {
             let mut line_content = format!(" {} ", wrapped_line);
             let char_count = line_content.chars().count();
             if char_count < actual_bubble_width.saturating_sub(1) {
-                line_content.push_str(&" ".repeat(actual_bubble_width.saturating_sub(1) - char_count));
+                line_content
+                    .push_str(&" ".repeat(actual_bubble_width.saturating_sub(1) - char_count));
             }
-            
+
             lines.push(Line::from(vec![
                 left_padding.clone(),
                 border_span.clone(),
-                Span::styled(line_content, Style::default().fg(text_color).bg(app.theme.background()).add_modifier(opacity)),
+                Span::styled(
+                    line_content,
+                    Style::default()
+                        .fg(text_color)
+                        .bg(app.theme.background())
+                        .add_modifier(opacity),
+                ),
             ]));
         }
         lines.push(Line::from(""));
@@ -287,7 +362,12 @@ fn render_bubbles(f: &mut Frame, area: Rect, app: &App) {
         bubble_info.push(vec![
             Line::from(vec![
                 Span::styled(" ◈ ", Style::default().fg(app.theme.assistant_bubble())),
-                Span::styled("MINIPWN is thinking", Style::default().fg(app.theme.assistant_bubble()).add_modifier(Modifier::ITALIC)),
+                Span::styled(
+                    "MINIPWN is thinking",
+                    Style::default()
+                        .fg(app.theme.assistant_bubble())
+                        .add_modifier(Modifier::ITALIC),
+                ),
                 Span::styled(" ...", Style::default().fg(app.theme.assistant_bubble())),
             ]),
             Line::from(""),
@@ -340,16 +420,13 @@ fn render_input_box(f: &mut Frame, area: Rect, app: &App) {
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(app.suggestions.len() as u16 + 2), // Suggestions + Borders
-                Constraint::Length(1), // Minimal input line
+                Constraint::Length(1),                                // Minimal input line
             ])
             .split(inner_area)
     } else {
         Layout::default()
             .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Min(0),
-                Constraint::Length(1),
-            ])
+            .constraints([Constraint::Min(0), Constraint::Length(1)])
             .split(inner_area)
     };
 
@@ -361,12 +438,12 @@ fn render_input_box(f: &mut Frame, area: Rect, app: &App) {
                 Span::styled(suggestion.clone(), Style::default().fg(app.theme.text())),
             ])));
         }
-        
+
         let block = Block::default()
             .borders(Borders::ALL)
             .border_type(ratatui::widgets::BorderType::Rounded)
             .border_style(Style::default().fg(app.theme.surface()));
-            
+
         let list = List::new(list_items).block(block);
         f.render_widget(list, chunks[0]);
     }
@@ -376,11 +453,22 @@ fn render_input_box(f: &mut Frame, area: Rect, app: &App) {
     let cursor_char = app.input.chars().nth(app.cursor).unwrap_or(' ');
     let after = if app.cursor < app.input.len() {
         let next = app.cursor + cursor_char.len_utf8();
-        if next <= app.input.len() { &app.input[next..] } else { "" }
-    } else { "" };
+        if next <= app.input.len() {
+            &app.input[next..]
+        } else {
+            ""
+        }
+    } else {
+        ""
+    };
 
     let input_line = Line::from(vec![
-        Span::styled(prompt, Style::default().fg(app.theme.primary()).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            prompt,
+            Style::default()
+                .fg(app.theme.primary())
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(before.to_string(), Style::default().fg(app.theme.text())),
         Span::styled(
             cursor_char.to_string(),
@@ -393,27 +481,81 @@ fn render_input_box(f: &mut Frame, area: Rect, app: &App) {
         Span::styled(after.to_string(), Style::default().fg(app.theme.text())),
     ]);
 
-    let input_para = Paragraph::new(input_line)
-        .block(Block::default()
+    let input_para = Paragraph::new(input_line).block(
+        Block::default()
             .borders(Borders::RIGHT)
-            .border_style(Style::default().fg(app.theme.surface())));
+            .border_style(Style::default().fg(app.theme.surface())),
+    );
 
-    f.render_widget(input_para, chunks[if !app.suggestions.is_empty() { 1 } else { 1 }]);
+    f.render_widget(
+        input_para,
+        chunks[if !app.suggestions.is_empty() { 1 } else { 1 }],
+    );
 }
 
 fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
-    let mode = match &app.execution_mode {
-        crate::tools::ExecutionMode::Local { .. } => "◈ LOCAL",
-        crate::tools::ExecutionMode::Remote { .. } => "◈ REMOTE",
+    let mode_str = match &app.execution_mode {
+        crate::tools::ExecutionMode::Local { .. } => "◈ LOCAL MODE",
+        crate::tools::ExecutionMode::Remote { .. } => "◈ REMOTE MODE",
     };
 
-    let status_line = Line::from(vec![
-        Span::styled(format!("  {}  ", mode), Style::default().fg(app.theme.primary()).bg(app.theme.surface())),
-        Span::styled(format!("  {}  ", app.provider.display_name().to_uppercase()), Style::default().fg(app.theme.text_dim())),
-        Span::styled(format!("  {}  ", app.theme.name.to_uppercase()), Style::default().fg(app.theme.text_dim())),
-        Span::styled("  press / for commands  ", Style::default().fg(app.theme.text_dim()).add_modifier(Modifier::ITALIC)),
+    let worker_id = match &app.execution_mode {
+        crate::tools::ExecutionMode::Local { .. } => "LOCAL",
+        crate::tools::ExecutionMode::Remote { client, .. } => {
+            // Try to use hostname or just the URL
+            client.base_url.trim_start_matches("http://").trim_start_matches("https://").split(':').next().unwrap_or("REMOTE")
+        }
+    };
+
+    let provider_name = app.provider.display_name().to_uppercase();
+    let model_name = app
+        .secrets
+        .model(&app.provider)
+        .unwrap_or("GPT-4O-MINI")
+        .to_uppercase();
+
+    // Left: [PROVIDER] [MODEL] [ExecutionMode]
+    let left_side = Line::from(vec![
+        Span::styled(
+            format!(" {} ", provider_name),
+            Style::default()
+                .fg(app.theme.background())
+                .bg(app.theme.secondary())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(" {} ", model_name),
+            Style::default()
+                .fg(app.theme.background())
+                .bg(app.theme.primary())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("  {}  ", mode_str),
+            Style::default().fg(app.theme.text_dim()),
+        ),
     ]);
 
-    let p = Paragraph::new(status_line).alignment(Alignment::Right);
-    f.render_widget(p, area);
+    // Right: [Theme] [Hint] [WorkerID]
+    let right_side = Line::from(vec![
+        Span::styled(
+            format!("  {}  ", app.theme.name.to_uppercase()),
+            Style::default().fg(app.theme.text_dim()),
+        ),
+        Span::styled(
+            "  press / for commands  ",
+            Style::default()
+                .fg(app.theme.text_dim())
+                .add_modifier(Modifier::ITALIC),
+        ),
+        Span::styled(
+            format!("  {}  ", worker_id),
+            Style::default()
+                .fg(app.theme.primary())
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]);
+
+    f.render_widget(Paragraph::new(left_side).alignment(Alignment::Left), area);
+    f.render_widget(Paragraph::new(right_side).alignment(Alignment::Right), area);
 }

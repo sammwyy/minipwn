@@ -12,7 +12,7 @@ impl Command for ClearCommand {
     fn description(&self) -> &str { "Clear chat bubbles" }
     fn usage(&self) -> &str { "/clear" }
 
-    async fn execute(&self, app: &mut App, _args: &[&str]) -> Result<String> {
+    async fn execute(&self, app: &mut App, _name: &str, _args: &[&str]) -> Result<String> {
         app.bubbles.clear();
         let _ = clear_chat(&app.chat_id);
         Ok(String::new())

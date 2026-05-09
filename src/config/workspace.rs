@@ -15,10 +15,14 @@ pub const SYSTEM_PROMPT_FILE: &str = "system_prompt.md";
 /// Default system prompt embedded at compile time.
 pub const DEFAULT_SYSTEM_PROMPT: &str = include_str!("../../data/system_prompt.md");
 
+pub fn default_mode() -> String { "safe".to_string() }
+
 /// workspace.toml schema.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkspaceMeta {
     pub current_chat: String,
+    #[serde(default = "crate::config::workspace::default_mode")]
+    pub mode: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -30,6 +34,7 @@ impl Default for WorkspaceMeta {
     fn default() -> Self {
         Self {
             current_chat: "1".to_string(),
+            mode: "safe".to_string(),
         }
     }
 }
@@ -176,16 +181,42 @@ fn chat_path(id: &str) -> Result<PathBuf> {
 }
 
 /// Load the system prompt: workspace system_prompt.md > default embedded.
-pub fn load_system_prompt() -> String {
+pub fn load_system_prompt(mode: &str) -> String {
     let path = workspace_dir()
         .map(|d| d.join(SYSTEM_PROMPT_FILE))
         .unwrap_or_else(|_| PathBuf::from(SYSTEM_PROMPT_FILE));
 
-    if path.exists() {
+    let raw = if path.exists() {
         std::fs::read_to_string(&path).unwrap_or_else(|_| DEFAULT_SYSTEM_PROMPT.to_string())
     } else {
         DEFAULT_SYSTEM_PROMPT.to_string()
+    };
+    
+    let mut result = String::new();
+    let mut in_safe = false;
+    let mut in_weaponized = false;
+    
+    for line in raw.lines() {
+        let t = line.trim();
+        if t == "<if_safe>" {
+            in_safe = true;
+            continue;
+        } else if t == "<if_weaponized>" {
+            in_weaponized = true;
+            continue;
+        } else if t == "</end_if>" {
+            in_safe = false;
+            in_weaponized = false;
+            continue;
+        }
+        
+        if in_safe && mode != "safe" { continue; }
+        if in_weaponized && mode != "weaponized" { continue; }
+        
+        result.push_str(line);
+        result.push('\n');
     }
+    result
 }
 
 /// Saved worker entry in the global workers.toml.

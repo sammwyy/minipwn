@@ -8,7 +8,7 @@ pub trait Command: Send + Sync {
     fn aliases(&self) -> Vec<&str> { vec![] }
     fn description(&self) -> &str;
     fn usage(&self) -> &str;
-    async fn execute(&self, app: &mut App, args: &[&str]) -> Result<String>;
+    async fn execute(&self, app: &mut App, name: &str, args: &[&str]) -> Result<String>;
 }
 
 pub struct CommandRegistry {
@@ -27,6 +27,7 @@ impl CommandRegistry {
                 Box::new(clear::ClearCommand {}),
                 Box::new(apikey::ApiKeyCommand {}),
                 Box::new(worker::WorkerCommand {}),
+                Box::new(mode::ModeCommand {}),
             ],
         }
     }
@@ -46,3 +47,4 @@ pub mod theme;
 pub mod clear;
 pub mod apikey;
 pub mod worker;
+pub mod mode;
