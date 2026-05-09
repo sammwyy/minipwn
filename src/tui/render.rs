@@ -8,7 +8,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
 
-use pulldown_cmark::{Parser, Event, Tag, TagEnd};
+use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 
 use super::app::App;
 use crate::tui::theme::Theme;
@@ -63,10 +63,24 @@ fn parse_markdown<'a>(text: &'a str, theme: &Theme) -> Vec<Line<'a>> {
                 match tag {
                     Tag::Strong => current_style = current_style.add_modifier(Modifier::BOLD),
                     Tag::Emphasis => current_style = current_style.add_modifier(Modifier::ITALIC),
-                    Tag::Strikethrough => current_style = current_style.add_modifier(Modifier::CROSSED_OUT),
-                    Tag::Link { .. } => current_style = current_style.fg(theme.primary()).add_modifier(Modifier::UNDERLINED),
-                    Tag::Heading { .. } => current_style = current_style.add_modifier(Modifier::BOLD).fg(theme.primary()),
-                    Tag::BlockQuote(_) => current_style = current_style.fg(theme.text_dim()).add_modifier(Modifier::ITALIC),
+                    Tag::Strikethrough => {
+                        current_style = current_style.add_modifier(Modifier::CROSSED_OUT)
+                    }
+                    Tag::Link { .. } => {
+                        current_style = current_style
+                            .fg(theme.primary())
+                            .add_modifier(Modifier::UNDERLINED)
+                    }
+                    Tag::Heading { .. } => {
+                        current_style = current_style
+                            .add_modifier(Modifier::BOLD)
+                            .fg(theme.primary())
+                    }
+                    Tag::BlockQuote(_) => {
+                        current_style = current_style
+                            .fg(theme.text_dim())
+                            .add_modifier(Modifier::ITALIC)
+                    }
                     _ => {}
                 }
             }
@@ -76,17 +90,37 @@ fn parse_markdown<'a>(text: &'a str, theme: &Theme) -> Vec<Line<'a>> {
                 for tag in &tag_stack {
                     match tag {
                         Tag::Strong => current_style = current_style.add_modifier(Modifier::BOLD),
-                        Tag::Emphasis => current_style = current_style.add_modifier(Modifier::ITALIC),
-                        Tag::Strikethrough => current_style = current_style.add_modifier(Modifier::CROSSED_OUT),
-                        Tag::Link { .. } => current_style = current_style.fg(theme.primary()).add_modifier(Modifier::UNDERLINED),
-                        Tag::Heading { .. } => current_style = current_style.add_modifier(Modifier::BOLD).fg(theme.primary()),
-                        Tag::BlockQuote(_) => current_style = current_style.fg(theme.text_dim()).add_modifier(Modifier::ITALIC),
+                        Tag::Emphasis => {
+                            current_style = current_style.add_modifier(Modifier::ITALIC)
+                        }
+                        Tag::Strikethrough => {
+                            current_style = current_style.add_modifier(Modifier::CROSSED_OUT)
+                        }
+                        Tag::Link { .. } => {
+                            current_style = current_style
+                                .fg(theme.primary())
+                                .add_modifier(Modifier::UNDERLINED)
+                        }
+                        Tag::Heading { .. } => {
+                            current_style = current_style
+                                .add_modifier(Modifier::BOLD)
+                                .fg(theme.primary())
+                        }
+                        Tag::BlockQuote(_) => {
+                            current_style = current_style
+                                .fg(theme.text_dim())
+                                .add_modifier(Modifier::ITALIC)
+                        }
                         _ => {}
                     }
                 }
-                
+
                 match tag_end {
-                    TagEnd::Heading(_) | TagEnd::Paragraph | TagEnd::BlockQuote(_) | TagEnd::List(_) | TagEnd::Item => {
+                    TagEnd::Heading(_)
+                    | TagEnd::Paragraph
+                    | TagEnd::BlockQuote(_)
+                    | TagEnd::List(_)
+                    | TagEnd::Item => {
                         if !current_line.is_empty() {
                             lines.push(Line::from(current_line.clone()));
                             current_line.clear();
@@ -99,7 +133,10 @@ fn parse_markdown<'a>(text: &'a str, theme: &Theme) -> Vec<Line<'a>> {
                 current_line.push(Span::styled(t.to_string(), current_style));
             }
             Event::Code(t) => {
-                current_line.push(Span::styled(format!(" {} ", t), current_style.bg(theme.surface()).fg(theme.secondary())));
+                current_line.push(Span::styled(
+                    format!(" {} ", t),
+                    current_style.bg(theme.surface()).fg(theme.secondary()),
+                ));
             }
             Event::SoftBreak | Event::HardBreak => {
                 if !current_line.is_empty() {
@@ -110,11 +147,11 @@ fn parse_markdown<'a>(text: &'a str, theme: &Theme) -> Vec<Line<'a>> {
             _ => {}
         }
     }
-    
+
     if !current_line.is_empty() {
         lines.push(Line::from(current_line));
     }
-    
+
     lines
 }
 
@@ -129,7 +166,7 @@ fn wrap_line<'a>(line: Line<'a>, max_width: usize) -> Vec<Line<'a>> {
 
         for word in words {
             let word_width = word.chars().count();
-            
+
             if current_width + word_width > max_width && current_width > 0 {
                 wrapped.push(Line::from(current_spans));
                 current_spans = Vec::new();
@@ -281,6 +318,7 @@ fn centered_rect_fixed_height(percent_x: u16, height: u16, r: Rect) -> Rect {
         .split(popup_layout[1])[1]
 }
 
+/*
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
     let popup_layout = Layout::default()
         .direction(Direction::Vertical)
@@ -300,6 +338,7 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
         ])
         .split(popup_layout[1])[1]
 }
+ */
 
 fn render_title_bar(f: &mut Frame, area: Rect, app: &App) {
     let title_span = Span::styled(
@@ -399,7 +438,7 @@ fn render_bubbles(f: &mut Frame, area: Rect, app: &App) {
     let mut bubble_info = Vec::new();
 
     for bubble in &app.bubbles {
-        let (icon, role_name, color, text_color) = if bubble.role == "tool" {
+        let (icon, role_name, color, _) = if bubble.role == "tool" {
             let color = if bubble.content.contains("Success:") {
                 app.theme.success()
             } else if bubble.content.contains("Error:") {
@@ -432,11 +471,7 @@ fn render_bubbles(f: &mut Frame, area: Rect, app: &App) {
             wrapped_lines.extend(wrap_line(line, max_text_width));
         }
 
-        let max_line_len = wrapped_lines
-            .iter()
-            .map(|l| l.width())
-            .max()
-            .unwrap_or(0);
+        let max_line_len = wrapped_lines.iter().map(|l| l.width()).max().unwrap_or(0);
         let title_len = role_name.chars().count() + icon.chars().count() + 3;
 
         let mut actual_bubble_width = std::cmp::max(title_len, max_line_len + 3);
@@ -474,7 +509,7 @@ fn render_bubbles(f: &mut Frame, area: Rect, app: &App) {
                 border_span.clone(),
                 Span::styled(" ", Style::default().bg(app.theme.background())),
             ];
-            
+
             for mut span in wrapped_line.spans {
                 span.style = span.style.bg(app.theme.background()).add_modifier(opacity);
                 spans.push(span);
@@ -633,7 +668,13 @@ fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
     let worker_label = match &app.execution_mode {
         crate::tools::ExecutionMode::Local { .. } => "◈ LOCAL".to_string(),
         crate::tools::ExecutionMode::Remote { client, .. } => {
-            let host = client.base_url.trim_start_matches("http://").trim_start_matches("https://").split(':').next().unwrap_or("REMOTE");
+            let host = client
+                .base_url
+                .trim_start_matches("http://")
+                .trim_start_matches("https://")
+                .split(':')
+                .next()
+                .unwrap_or("REMOTE");
             format!("◈ REMOTE ({})", host)
         }
     };

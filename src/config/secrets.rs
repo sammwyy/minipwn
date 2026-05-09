@@ -114,7 +114,8 @@ impl Secrets {
 
     /// Set provider-specific secret key.
     pub fn set_key(&mut self, provider: &Provider, key: &str) {
-        self.values.insert(format!("{}_SECRETKEY", provider.prefix()), key.to_string());
+        self.values
+            .insert(format!("{}_SECRETKEY", provider.prefix()), key.to_string());
     }
 
     /// Save all secrets back to disk in KEY="VALUE" format.
@@ -130,6 +131,7 @@ impl Secrets {
     }
 }
 
+/*
 /// Censor an API key for display: show first 4 and last 4 chars.
 pub fn censor_key(key: &str) -> String {
     if key.len() <= 8 {
@@ -137,3 +139,4 @@ pub fn censor_key(key: &str) -> String {
     }
     format!("{}...{}", &key[..4], &key[key.len() - 4..])
 }
+*/
