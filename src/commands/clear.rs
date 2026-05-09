@@ -1,6 +1,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use crate::tui::app::App;
+use crate::config::clear_chat;
 use super::Command;
 
 pub struct ClearCommand {}
@@ -13,6 +14,7 @@ impl Command for ClearCommand {
 
     async fn execute(&self, app: &mut App, _args: &[&str]) -> Result<String> {
         app.bubbles.clear();
-        Ok("Chat cleared".to_string())
+        let _ = clear_chat(&app.chat_id);
+        Ok(String::new())
     }
 }

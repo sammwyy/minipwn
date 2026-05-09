@@ -424,42 +424,65 @@ async fn send_message(
 
         // Check for a tool call in the reply
         if let Some(tool_call) = extract_tool_call(&reply) {
-            // Show the AI message with tool invocation
-            app.bubbles.push(Bubble {
-                role: "assistant".to_string(),
-                content: reply.clone(),
-                is_ephemeral: false,
-            });
+            // Show the AI message with tool invocation (stripped of JSON)
+            let stripped_reply = crate::tools::strip_tool_call(&reply);
+            if !stripped_reply.is_empty() {
+                app.bubbles.push(Bubble {
+                    role: "assistant".to_string(),
+                    content: stripped_reply,
+                    is_ephemeral: false,
+                });
+            }
+            
             append_message(
                 &app.chat_id,
                 ChatMessage {
                     role: "assistant".to_string(),
-                    content: reply.clone(),
+                    content: reply.clone(), // Keep full reply in persistent history
                     timestamp: chrono::Utc::now(),
                 },
             )?;
 
             terminal.draw(|f| render_ui(f, app))?;
 
+            // Push a "Running..." bubble
+            let tool_bubble_idx = app.bubbles.len();
+            app.bubbles.push(Bubble {
+                role: "tool".to_string(),
+                content: format!("Running tool: {}...", tool_call.tool),
+                is_ephemeral: false,
+            });
+            terminal.draw(|f| render_ui(f, app))?;
+
             // Execute the tool
+            let start_time = std::time::Instant::now();
             let result = app.execution_mode.execute(&tool_call).await;
-            let result_text = format!(
+            let elapsed = start_time.elapsed();
+
+            let full_result_text = format!(
                 "[Tool: {}] {}\n{}",
                 tool_call.tool,
                 if result.success { "OK" } else { "FAILED" },
                 result.output
             );
 
-            app.bubbles.push(Bubble {
-                role: "tool".to_string(),
-                content: result_text.clone(),
-                is_ephemeral: false,
-            });
+            // Create a brief summary for the UI
+            let num_lines = result.output.lines().count();
+            let mut brief = result.output.replace('\n', " ");
+            if brief.chars().count() > 32 {
+                brief = format!("{}...", brief.chars().take(32).collect::<String>());
+            }
+            let status = if result.success { format!("Finished in {:.2?}", elapsed) } else { "Error".to_string() };
+            
+            app.bubbles[tool_bubble_idx].content = format!(
+                "Tool: {}\nStatus: {}\nOutput ({} lines):\n  {}",
+                tool_call.tool, status, num_lines, brief
+            );
 
             // Feed result back to AI
             messages.push(ChatMsg {
                 role: "user".to_string(),
-                content: format!("Tool result:\n{}", result_text),
+                content: format!("Tool result:\n{}", full_result_text),
             });
 
             terminal.draw(|f| render_ui(f, app))?;
