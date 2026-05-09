@@ -114,18 +114,58 @@ pub async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Resul
         messages: vec![],
     });
 
-    let bubbles: Vec<Bubble> = session
-        .messages
-        .iter()
-        .rev()
-        .take(10)
-        .rev()
-        .map(|m| Bubble {
-            role: m.role.clone(),
-            content: m.content.clone(),
-            is_ephemeral: false,
-        })
-        .collect();
+    let mut bubbles = Vec::new();
+    let history_messages: Vec<_> = session.messages.iter().rev().take(20).rev().collect();
+    
+    for m in history_messages {
+        if m.role == "assistant" {
+            let stripped = crate::tools::strip_tool_call(&m.content);
+            if !stripped.is_empty() {
+                bubbles.push(Bubble {
+                    role: m.role.clone(),
+                    content: stripped,
+                    is_ephemeral: false,
+                });
+            }
+        } else if m.role == "user" && m.content.starts_with("Tool result:\n[Tool: ") {
+            let rest = &m.content["Tool result:\n[Tool: ".len()..];
+            if let Some(bracket_idx) = rest.find(']') {
+                let tool_name = &rest[..bracket_idx];
+                let nice_tool_name = tool_name.split('_').map(|s| {
+                    let mut c = s.chars();
+                    match c.next() {
+                        None => String::new(),
+                        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                    }
+                }).collect::<Vec<_>>().join(" ");
+
+                let rest2 = &rest[bracket_idx + 2..];
+                if let Some(newline_idx) = rest2.find('\n') {
+                    let status_str = &rest2[..newline_idx];
+                    let output = &rest2[newline_idx + 1..];
+
+                    let mut brief = output.replace('\n', " ");
+                    if brief.chars().count() > 32 {
+                        brief = format!("{}...", brief.chars().take(32).collect::<String>());
+                    }
+
+                    let status_prefix = if status_str == "OK" { "Success:" } else { "Error:" };
+                    
+                    bubbles.push(Bubble {
+                        role: "tool".to_string(),
+                        content: format!("{}\n{} {}", nice_tool_name, status_prefix, brief),
+                        is_ephemeral: false,
+                    });
+                }
+            }
+        } else {
+            bubbles.push(Bubble {
+                role: m.role.clone(),
+                content: m.content.clone(),
+                is_ephemeral: false,
+            });
+        }
+    }
 
     let chat_id = meta.current_chat.clone();
 
@@ -157,7 +197,8 @@ pub async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Resul
 
         // Poll for input with timeout so we can handle async
         if event::poll(Duration::from_millis(100))? {
-            if let Event::Key(key) = event::read()? {
+            let ev = event::read()?;
+            if let Event::Key(key) = ev {
                 // Ctrl-C / Ctrl-Q: quit
                 if (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL))
                     || (key.code == KeyCode::Char('q')
@@ -318,6 +359,17 @@ pub async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Resul
                     KeyCode::PageDown => {
                         app.scroll_offset = app.scroll_offset.saturating_sub(5);
                     }
+
+                    _ => {}
+                }
+            } else if let Event::Mouse(mouse) = ev {
+                match mouse.kind {
+                    event::MouseEventKind::ScrollUp => {
+                        app.scroll_offset = app.scroll_offset.saturating_add(3);
+                    }
+                    event::MouseEventKind::ScrollDown => {
+                        app.scroll_offset = app.scroll_offset.saturating_sub(3);
+                    }
                     _ => {}
                 }
             }
@@ -396,14 +448,40 @@ async fn send_message(
             break;
         }
 
-        let reply = match ai_client.complete(messages.clone()).await {
-            Ok(r) => r,
-            Err(e) => {
+        let reply_result = tokio::select! {
+            res = ai_client.complete(messages.clone()) => Some(res),
+            _ = async {
+                loop {
+                    if crossterm::event::poll(std::time::Duration::from_millis(50)).unwrap_or(false) {
+                        if let Ok(crossterm::event::Event::Key(k)) = crossterm::event::read() {
+                            if k.code == crossterm::event::KeyCode::Esc || 
+                               (k.code == crossterm::event::KeyCode::Char('c') && k.modifiers.contains(crossterm::event::KeyModifiers::CONTROL)) {
+                                break;
+                            }
+                        }
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            } => None,
+        };
+
+        let reply = match reply_result {
+            Some(Ok(r)) => r,
+            Some(Err(e)) => {
                 app.status = format!("API error: {}", e);
                 app.bubbles.push(Bubble {
                     role: "assistant".to_string(),
                     content: format!("API error: {}", e),
                     is_ephemeral: false,
+                });
+                break;
+            }
+            None => {
+                app.status = "Generation cancelled by user".to_string();
+                app.bubbles.push(Bubble {
+                    role: "assistant".to_string(),
+                    content: "[Generation cancelled]".to_string(),
+                    is_ephemeral: true,
                 });
                 break;
             }
@@ -445,11 +523,17 @@ async fn send_message(
 
             terminal.draw(|f| render_ui(f, app))?;
 
+            let cmd_text = if tool_call.tool == "shell_exec" {
+                tool_call.args.get("command").and_then(|v| v.as_str()).unwrap_or("").to_string()
+            } else {
+                tool_call.args.to_string()
+            };
+
             // Push a "Running..." bubble
             let tool_bubble_idx = app.bubbles.len();
             app.bubbles.push(Bubble {
                 role: "tool".to_string(),
-                content: format!("Running tool: {}...", tool_call.tool),
+                content: format!("{}: {}\n(Running...)", tool_call.tool, cmd_text),
                 is_ephemeral: false,
             });
             terminal.draw(|f| render_ui(f, app))?;
@@ -472,11 +556,16 @@ async fn send_message(
             if brief.chars().count() > 32 {
                 brief = format!("{}...", brief.chars().take(32).collect::<String>());
             }
-            let status = if result.success { format!("Finished in {:.2?}", elapsed) } else { "Error".to_string() };
+            
+            let secs = elapsed.as_secs();
+            let ms = elapsed.subsec_millis();
+            let time_str = format!("{:02}:{:02}.{:03}", secs / 60, secs % 60, ms);
+
+            let status_prefix = if result.success { format!("(Ok: {})", time_str) } else { format!("(Err: {})", time_str) };
             
             app.bubbles[tool_bubble_idx].content = format!(
-                "Tool: {}\nStatus: {}\nOutput ({} lines):\n  {}",
-                tool_call.tool, status, num_lines, brief
+                "{}: {}\n{} {} [{} lines]",
+                tool_call.tool, cmd_text, status_prefix, brief, num_lines
             );
 
             // Feed result back to AI

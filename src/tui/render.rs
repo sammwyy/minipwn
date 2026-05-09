@@ -191,7 +191,14 @@ fn render_bubbles(f: &mut Frame, area: Rect, app: &App) {
 
     for bubble in &app.bubbles {
         let (icon, role_name, color, text_color) = if bubble.role == "tool" {
-            ("◆", "TOOL RESULT", if bubble.content.contains("OK") { app.theme.success() } else { app.theme.error() }, app.theme.text())
+            let color = if bubble.content.contains("Success:") {
+                app.theme.success()
+            } else if bubble.content.contains("Error:") {
+                app.theme.error()
+            } else {
+                app.theme.secondary()
+            };
+            ("◆", "TOOL RESULT", color, app.theme.text_dim())
         } else if bubble.role == "user" {
             ("◇", "YOU", app.theme.user_bubble(), app.theme.text())
         } else if bubble.is_ephemeral {
@@ -292,7 +299,8 @@ fn render_bubbles(f: &mut Frame, area: Rect, app: &App) {
     let content_height = all_lines.len() as u16;
     let view_height = inner_area.height;
     let max_scroll = content_height.saturating_sub(view_height);
-    let scroll = max_scroll.saturating_sub(app.scroll_offset);
+    let actual_scroll_offset = (app.scroll_offset as u16).min(max_scroll);
+    let scroll = max_scroll.saturating_sub(actual_scroll_offset);
 
     // Render using a single Paragraph to ensure background fills width correctly
     let paragraph = Paragraph::new(all_lines)
@@ -300,6 +308,19 @@ fn render_bubbles(f: &mut Frame, area: Rect, app: &App) {
         .wrap(Wrap { trim: false });
 
     f.render_widget(paragraph, inner_area);
+
+    if max_scroll > 0 {
+        let scrollbar = ratatui::widgets::Scrollbar::default()
+            .orientation(ratatui::widgets::ScrollbarOrientation::VerticalRight)
+            .begin_symbol(Some("▲"))
+            .end_symbol(Some("▼"));
+
+        let mut scrollbar_state = ratatui::widgets::ScrollbarState::default()
+            .content_length(max_scroll as usize)
+            .position(scroll as usize);
+
+        f.render_stateful_widget(scrollbar, area, &mut scrollbar_state);
+    }
 }
 
 fn render_input_box(f: &mut Frame, area: Rect, app: &App) {
