@@ -50,10 +50,21 @@ fn render_modal(f: &mut Frame, app: &App) {
     let modal = app.modal.as_ref().unwrap();
     let area = f.size();
 
-    // Center the modal
-    let modal_area = centered_rect(60, 60, area);
+    let num_items = modal.items.len();
+    let show_search = num_items > 5;
 
-    // Clear the background
+    let mut inner_height = num_items as u16;
+    if show_search {
+        inner_height += 2;
+    }
+    inner_height += 1; // Help line
+
+    let total_height = inner_height + 2; // Borders
+    let max_height = (area.height * 80 / 100) as u16;
+    let final_height = std::cmp::min(total_height, max_height);
+
+    let modal_area = centered_rect_fixed_height(60, final_height, area);
+
     f.render_widget(Clear, modal_area);
 
     let block = Block::default()
@@ -67,23 +78,38 @@ fn render_modal(f: &mut Frame, app: &App) {
         ))
         .style(Style::default().bg(app.theme.background()));
 
+    let constraints = if show_search {
+        vec![
+            Constraint::Length(2), // Search
+            Constraint::Min(0),    // List
+            Constraint::Length(1), // Help
+        ]
+    } else {
+        vec![
+            Constraint::Min(0),    // List
+            Constraint::Length(1), // Help
+        ]
+    };
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(2), // Filter input
-            Constraint::Min(0),    // Item list
-            Constraint::Length(1), // Help
-        ])
+        .constraints(constraints)
         .margin(1)
         .split(modal_area);
 
-    // Filter
-    let filter_text = Line::from(vec![
-        Span::styled(" Search: ", Style::default().fg(app.theme.text_dim())),
-        Span::styled(modal.filter.clone(), Style::default().fg(app.theme.text())),
-        Span::styled("█", Style::default().fg(app.theme.primary())),
-    ]);
-    f.render_widget(Paragraph::new(filter_text), chunks[0]);
+    let mut list_chunk_idx = 0;
+
+    if show_search {
+        let filter_text = Line::from(vec![
+            Span::styled(" Search: ", Style::default().fg(app.theme.text_dim())),
+            Span::styled(modal.filter.clone(), Style::default().fg(app.theme.text())),
+            Span::styled("█", Style::default().fg(app.theme.primary())),
+        ]);
+        f.render_widget(Paragraph::new(filter_text), chunks[0]);
+        list_chunk_idx = 1;
+    }
+
+    let help_chunk_idx = list_chunk_idx + 1;
 
     // Items
     let filtered_items: Vec<_> = modal
@@ -112,15 +138,35 @@ fn render_modal(f: &mut Frame, app: &App) {
         )
         .highlight_symbol(" ❯ ");
 
-    f.render_stateful_widget(list, chunks[1], &mut state);
+    f.render_stateful_widget(list, chunks[list_chunk_idx], &mut state);
 
-    // Help
     let help = Paragraph::new(" [Enter] Select   [Esc] Cancel   [↑↓] Navigate ")
         .alignment(Alignment::Center)
         .style(Style::default().fg(app.theme.text_dim()));
-    f.render_widget(help, chunks[2]);
+    f.render_widget(help, chunks[help_chunk_idx]);
 
     f.render_widget(block, modal_area);
+}
+
+fn centered_rect_fixed_height(percent_x: u16, height: u16, r: Rect) -> Rect {
+    let vertical_pad = r.height.saturating_sub(height) / 2;
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(vertical_pad),
+            Constraint::Length(height),
+            Constraint::Min(0),
+        ])
+        .split(r);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(popup_layout[1])[1]
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
@@ -494,16 +540,11 @@ fn render_input_box(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
-    let mode_str = match &app.execution_mode {
-        crate::tools::ExecutionMode::Local { .. } => "◈ LOCAL MODE",
-        crate::tools::ExecutionMode::Remote { .. } => "◈ REMOTE MODE",
-    };
-
-    let worker_id = match &app.execution_mode {
-        crate::tools::ExecutionMode::Local { .. } => "LOCAL",
+    let worker_label = match &app.execution_mode {
+        crate::tools::ExecutionMode::Local { .. } => "◈ LOCAL".to_string(),
         crate::tools::ExecutionMode::Remote { client, .. } => {
-            // Try to use hostname or just the URL
-            client.base_url.trim_start_matches("http://").trim_start_matches("https://").split(':').next().unwrap_or("REMOTE")
+            let host = client.base_url.trim_start_matches("http://").trim_start_matches("https://").split(':').next().unwrap_or("REMOTE");
+            format!("◈ REMOTE ({})", host)
         }
     };
 
@@ -514,7 +555,7 @@ fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
         .unwrap_or("GPT-4O-MINI")
         .to_uppercase();
 
-    // Left: [PROVIDER] [MODEL] [ExecutionMode]
+    // Left: [PROVIDER] [MODEL]
     let left_side = Line::from(vec![
         Span::styled(
             format!(" {} ", provider_name),
@@ -530,13 +571,9 @@ fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
                 .bg(app.theme.primary())
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(
-            format!("  {}  ", mode_str),
-            Style::default().fg(app.theme.text_dim()),
-        ),
     ]);
 
-    // Right: [Theme] [Hint] [WorkerID]
+    // Right: [Theme] [Hint] [WorkerLabel]
     let right_side = Line::from(vec![
         Span::styled(
             format!("  {}  ", app.theme.name.to_uppercase()),
@@ -549,7 +586,7 @@ fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
                 .add_modifier(Modifier::ITALIC),
         ),
         Span::styled(
-            format!("  {}  ", worker_id),
+            format!("  {}  ", worker_label),
             Style::default()
                 .fg(app.theme.primary())
                 .add_modifier(Modifier::BOLD),
