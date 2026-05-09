@@ -523,6 +523,14 @@ async fn send_message(
 
             terminal.draw(|f| render_ui(f, app))?;
 
+            let nice_tool_name = tool_call.tool.split('_').map(|s| {
+                let mut c = s.chars();
+                match c.next() {
+                    None => String::new(),
+                    Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                }
+            }).collect::<Vec<_>>().join(" ");
+
             let cmd_text = if tool_call.tool == "shell_exec" {
                 tool_call.args.get("command").and_then(|v| v.as_str()).unwrap_or("").to_string()
             } else {
@@ -533,7 +541,7 @@ async fn send_message(
             let tool_bubble_idx = app.bubbles.len();
             app.bubbles.push(Bubble {
                 role: "tool".to_string(),
-                content: format!("{}: {}\n(Running...)", tool_call.tool, cmd_text),
+                content: format!("{}: {}\nRunning...", nice_tool_name, cmd_text),
                 is_ephemeral: false,
             });
             terminal.draw(|f| render_ui(f, app))?;
@@ -551,21 +559,16 @@ async fn send_message(
             );
 
             // Create a brief summary for the UI
-            let num_lines = result.output.lines().count();
             let mut brief = result.output.replace('\n', " ");
             if brief.chars().count() > 32 {
                 brief = format!("{}...", brief.chars().take(32).collect::<String>());
             }
             
-            let secs = elapsed.as_secs();
-            let ms = elapsed.subsec_millis();
-            let time_str = format!("{:02}:{:02}.{:03}", secs / 60, secs % 60, ms);
-
-            let status_prefix = if result.success { format!("(Ok: {})", time_str) } else { format!("(Err: {})", time_str) };
+            let status_prefix = if result.success { "Success:" } else { "Error:" };
             
             app.bubbles[tool_bubble_idx].content = format!(
-                "{}: {}\n{} {} [{} lines]",
-                tool_call.tool, cmd_text, status_prefix, brief, num_lines
+                "{}: {}\n{} {}",
+                nice_tool_name, cmd_text, status_prefix, brief
             );
 
             // Feed result back to AI
