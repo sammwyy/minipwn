@@ -449,6 +449,8 @@ fn render_bubbles(f: &mut Frame, area: Rect, app: &App) {
             ("◆", "TOOL RESULT", color, app.theme.text_dim())
         } else if bubble.role == "user" {
             ("◇", "YOU", app.theme.user_bubble(), app.theme.text())
+        } else if bubble.role == "thinking" {
+            ("✻", "THINKING", app.theme.text_dim(), app.theme.text_dim())
         } else if bubble.is_ephemeral {
             ("»", "COMMAND", app.theme.secondary(), app.theme.text_dim())
         } else {
@@ -466,7 +468,23 @@ fn render_bubbles(f: &mut Frame, area: Rect, app: &App) {
         let max_text_width = max_bubble_width.saturating_sub(4); // -1 for border, -3 for left/right padding
 
         let mut wrapped_lines = Vec::new();
-        let logical_lines = parse_markdown(&bubble.content, &app.theme);
+        // Reasoning is shown raw and dim; everything else renders as markdown.
+        let logical_lines = if bubble.role == "thinking" {
+            bubble
+                .content
+                .lines()
+                .map(|l| {
+                    Line::from(Span::styled(
+                        l,
+                        Style::default()
+                            .fg(app.theme.text_dim())
+                            .add_modifier(Modifier::ITALIC),
+                    ))
+                })
+                .collect()
+        } else {
+            parse_markdown(&bubble.content, &app.theme)
+        };
         for line in logical_lines {
             wrapped_lines.extend(wrap_line(line, max_text_width));
         }

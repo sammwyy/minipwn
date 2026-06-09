@@ -3,6 +3,8 @@
 use anyhow::Result;
 use async_trait::async_trait;
 
+use crate::ai::StreamPiece;
+
 /// How [`super::run_turn`] reports progress to the outside world.
 ///
 /// The agent never touches the terminal directly: it only calls these hooks.
@@ -13,6 +15,16 @@ use async_trait::async_trait;
 pub trait AgentUi {
     /// Append an assistant message. `ephemeral` messages are not persisted.
     fn assistant(&mut self, text: String, ephemeral: bool);
+
+    /// Begin a live, streaming assistant bubble; returns a handle to it.
+    fn stream_begin(&mut self) -> usize;
+
+    /// Append a streamed piece (reasoning or answer) to a streaming bubble.
+    fn stream_push(&mut self, handle: usize, piece: &StreamPiece);
+
+    /// Finish a streaming bubble: replace it with `text`, or remove it when
+    /// `None` (e.g. the message was only a tool call with no prose).
+    fn stream_end(&mut self, handle: usize, text: Option<String>);
 
     /// Append a tool bubble in its "running" state, returning a handle to it.
     fn tool_begin(&mut self, content: String) -> usize;
@@ -32,6 +44,8 @@ pub trait AgentUi {
     /// Render the current state.
     fn redraw(&mut self) -> Result<()>;
 
-    /// Resolves when the user requests cancellation of the in-flight request.
-    async fn wait_cancel(&mut self);
+    /// Process any pending user input (typing queues messages, slash commands
+    /// run immediately). Returns `true` if the user requested cancellation of
+    /// the in-flight generation (Esc / Ctrl-C).
+    async fn poll_input(&mut self) -> Result<bool>;
 }

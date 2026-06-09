@@ -34,8 +34,17 @@ impl AiClient {
         })
     }
 
-    /// Send a chat completion request and return the assistant's reply.
-    pub async fn complete(&self, messages: Vec<ChatMsg>) -> Result<String> {
+    /// Send a streaming chat completion request.
+    ///
+    /// Display deltas (reasoning, then answer text) are pushed to `deltas` as
+    /// they arrive so the UI can show progress. The returned String is the
+    /// final *answer* content only (reasoning excluded) — that is what tool-call
+    /// parsing and history persistence operate on.
+    pub async fn complete_stream(
+        &self,
+        messages: Vec<ChatMsg>,
+        deltas: tokio::sync::mpsc::UnboundedSender<StreamPiece>,
+    ) -> Result<String> {
         let url = format!("{}/chat/completions", self.endpoint.trim_end_matches('/'));
 
         let request = CompletionRequest {
@@ -43,9 +52,10 @@ impl AiClient {
             messages,
             max_tokens: Some(4096),
             temperature: Some(0.7),
+            stream: true,
         };
 
-        let resp = self
+        let mut resp = self
             .client
             .post(&url)
             .bearer_auth(&self.api_key)
@@ -59,14 +69,46 @@ impl AiClient {
             bail!("API error {}: {}", status, body);
         }
 
-        let completion: CompletionResponse = resp.json().await?;
+        let mut answer = String::new();
+        let mut buf: Vec<u8> = Vec::new();
 
-        completion
-            .choices
-            .into_iter()
-            .next()
-            .and_then(|c| c.message.content)
-            .ok_or_else(|| anyhow::anyhow!("Empty response from API"))
+        // Server-Sent Events: one `data: {json}` per line, terminated by `\n\n`.
+        while let Some(chunk) = resp.chunk().await? {
+            buf.extend_from_slice(&chunk);
+            while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
+                let raw: Vec<u8> = buf.drain(..=pos).collect();
+                let line = String::from_utf8_lossy(&raw);
+                let line = line.trim();
+
+                let Some(data) = line.strip_prefix("data:") else {
+                    continue;
+                };
+                let data = data.trim();
+                if data.is_empty() || data == "[DONE]" {
+                    continue;
+                }
+                let Ok(chunk) = serde_json::from_str::<StreamChunk>(data) else {
+                    continue;
+                };
+                let Some(choice) = chunk.choices.into_iter().next() else {
+                    continue;
+                };
+
+                if let Some(reasoning) = choice.delta.reasoning_content {
+                    if !reasoning.is_empty() {
+                        let _ = deltas.send(StreamPiece::Reasoning(reasoning));
+                    }
+                }
+                if let Some(content) = choice.delta.content {
+                    if !content.is_empty() {
+                        answer.push_str(&content);
+                        let _ = deltas.send(StreamPiece::Answer(content));
+                    }
+                }
+            }
+        }
+
+        Ok(answer)
     }
 
     /// List available models from the provider.
@@ -116,14 +158,26 @@ mod tests {
         let models = client.list_models().await.expect("list_models");
         assert!(models.iter().any(|m| m == "glm-5"), "models: {:?}", models);
 
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let pieces = tokio::spawn(async move {
+            let mut n = 0;
+            while rx.recv().await.is_some() {
+                n += 1;
+            }
+            n
+        });
         let reply = client
-            .complete(vec![ChatMsg {
-                role: "user".into(),
-                content: "Reply with exactly one word: pong".into(),
-            }])
+            .complete_stream(
+                vec![ChatMsg {
+                    role: "user".into(),
+                    content: "Reply with exactly one word: pong".into(),
+                }],
+                tx,
+            )
             .await
-            .expect("complete");
+            .expect("complete_stream");
         assert!(!reply.trim().is_empty(), "empty reply");
-        println!("opencode reply = {:?}", reply);
+        assert!(pieces.await.unwrap() > 0, "expected streamed pieces");
+        println!("opencode streamed reply = {:?}", reply);
     }
 }

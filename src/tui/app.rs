@@ -6,7 +6,7 @@ use ratatui::{Terminal, backend::CrosstermBackend};
 use std::io::Stdout;
 use std::time::Duration;
 
-use crate::ai::{AiClient, ChatMsg};
+use crate::ai::{AiClient, ChatMsg, StreamPiece};
 use crate::commands::CommandRegistry;
 use crate::config::{
     ChatMessage, GlobalConfig, Provider, SavedWorker, Secrets, WorkersList, WorkspaceMeta,
@@ -382,6 +382,34 @@ pub async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Resul
 struct TuiAgentUi<'a> {
     app: &'a mut App,
     terminal: &'a mut Terminal<CrosstermBackend<Stdout>>,
+    /// Index of the live "thinking" (reasoning) bubble for the current stream.
+    think_idx: Option<usize>,
+    /// Index of the live answer bubble for the current stream.
+    answer_idx: Option<usize>,
+    /// When reasoning started, to report how long the model "thought".
+    think_started: Option<std::time::Instant>,
+    /// Whether the thinking bubble has been collapsed to its summary line.
+    think_done: bool,
+}
+
+impl TuiAgentUi<'_> {
+    /// Collapse the live thinking bubble into a one-line `Finished thinking (…)`
+    /// summary (no-op if there was no reasoning or it is already collapsed).
+    fn finish_thinking(&mut self) {
+        if self.think_done {
+            return;
+        }
+        if let Some(idx) = self.think_idx {
+            let elapsed = self
+                .think_started
+                .map(|s| s.elapsed().as_secs_f64())
+                .unwrap_or(0.0);
+            if let Some(bubble) = self.app.bubbles.get_mut(idx) {
+                bubble.content = format!("Finished thinking ({:.2}s)", elapsed);
+            }
+            self.think_done = true;
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -392,6 +420,87 @@ impl AgentUi for TuiAgentUi<'_> {
             content: text,
             is_ephemeral: ephemeral,
         });
+    }
+
+    fn stream_begin(&mut self) -> usize {
+        // Reset per-stream state; bubbles are created lazily as pieces arrive.
+        self.think_idx = None;
+        self.answer_idx = None;
+        self.think_started = None;
+        self.think_done = false;
+        0
+    }
+
+    fn stream_push(&mut self, _handle: usize, piece: &StreamPiece) {
+        match piece {
+            StreamPiece::Reasoning(text) => {
+                let idx = match self.think_idx {
+                    Some(idx) => idx,
+                    None => {
+                        let idx = self.app.bubbles.len();
+                        self.app.bubbles.push(Bubble {
+                            role: "thinking".to_string(),
+                            content: String::new(),
+                            is_ephemeral: false,
+                        });
+                        self.think_idx = Some(idx);
+                        self.think_started = Some(std::time::Instant::now());
+                        idx
+                    }
+                };
+                if let Some(bubble) = self.app.bubbles.get_mut(idx) {
+                    bubble.content.push_str(text);
+                }
+            }
+            StreamPiece::Answer(text) => {
+                // First answer token marks the end of "thinking".
+                self.finish_thinking();
+                let idx = match self.answer_idx {
+                    Some(idx) => idx,
+                    None => {
+                        let idx = self.app.bubbles.len();
+                        self.app.bubbles.push(Bubble {
+                            role: "assistant".to_string(),
+                            content: String::new(),
+                            is_ephemeral: false,
+                        });
+                        self.answer_idx = Some(idx);
+                        idx
+                    }
+                };
+                if let Some(bubble) = self.app.bubbles.get_mut(idx) {
+                    bubble.content.push_str(text);
+                }
+            }
+        }
+    }
+
+    fn stream_end(&mut self, _handle: usize, text: Option<String>) {
+        // Close the thinking summary even if no answer ever streamed.
+        self.finish_thinking();
+
+        match text {
+            Some(t) => match self.answer_idx {
+                Some(idx) => {
+                    if let Some(bubble) = self.app.bubbles.get_mut(idx) {
+                        bubble.content = t;
+                    }
+                }
+                None => self.app.bubbles.push(Bubble {
+                    role: "assistant".to_string(),
+                    content: t,
+                    is_ephemeral: false,
+                }),
+            },
+            // Pure tool call with no prose: drop the streamed answer bubble.
+            None => {
+                if let Some(idx) = self.answer_idx
+                    && idx < self.app.bubbles.len()
+                {
+                    self.app.bubbles.remove(idx);
+                }
+            }
+        }
     }
 
     fn tool_begin(&mut self, content: String) -> usize {
@@ -429,66 +538,65 @@ impl AgentUi for TuiAgentUi<'_> {
         Ok(())
     }
 
-    /// While a turn runs, keep the input live: typed text is editable and
-    /// Enter queues it for the next turn. Resolves only when the user asks to
-    /// cancel (Esc / Ctrl-C), which is what stops the in-flight generation.
-    async fn wait_cancel(&mut self) {
-        loop {
-            if crossterm::event::poll(std::time::Duration::from_millis(50)).unwrap_or(false) {
-                if let Ok(crossterm::event::Event::Key(k)) = crossterm::event::read() {
-                    match k.code {
-                        crossterm::event::KeyCode::Esc => return,
-                        crossterm::event::KeyCode::Char('c')
-                            if k.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) =>
-                        {
-                            return;
+    /// Drain pending input without blocking. Typed text stays editable, Enter
+    /// queues a message (or runs a slash command immediately), and Esc / Ctrl-C
+    /// requests cancellation (returns `true`).
+    async fn poll_input(&mut self) -> Result<bool> {
+        while crossterm::event::poll(std::time::Duration::from_millis(0))? {
+            let crossterm::event::Event::Key(k) = crossterm::event::read()? else {
+                continue;
+            };
+            match k.code {
+                crossterm::event::KeyCode::Esc => return Ok(true),
+                crossterm::event::KeyCode::Char('c')
+                    if k.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) =>
+                {
+                    return Ok(true);
+                }
+                crossterm::event::KeyCode::Enter => {
+                    let line = self.app.input.trim().to_string();
+                    self.app.input.clear();
+                    self.app.cursor = 0;
+                    if !line.is_empty() {
+                        if line.starts_with('/') {
+                            // Commands run immediately, even mid-turn.
+                            run_command(self.app, &line).await;
+                        } else {
+                            // Plain messages wait for the next turn.
+                            self.app.queue.push(line);
                         }
-                        crossterm::event::KeyCode::Enter => {
-                            let line = self.app.input.trim().to_string();
-                            self.app.input.clear();
-                            self.app.cursor = 0;
-                            if !line.is_empty() {
-                                if line.starts_with('/') {
-                                    // Commands run immediately, even mid-turn.
-                                    run_command(self.app, &line).await;
-                                } else {
-                                    // Plain messages wait for the next turn.
-                                    self.app.queue.push(line);
-                                }
-                            }
-                            update_suggestions(self.app);
-                            let _ = self.redraw();
-                        }
-                        crossterm::event::KeyCode::Char(c) => {
-                            self.app.input.insert(self.app.cursor, c);
-                            self.app.cursor += 1;
-                            update_suggestions(self.app);
-                            let _ = self.redraw();
-                        }
-                        crossterm::event::KeyCode::Backspace => {
-                            if self.app.cursor > 0 {
-                                self.app.cursor -= 1;
-                                self.app.input.remove(self.app.cursor);
-                                update_suggestions(self.app);
-                                let _ = self.redraw();
-                            }
-                        }
-                        crossterm::event::KeyCode::Left => {
-                            if self.app.cursor > 0 {
-                                self.app.cursor -= 1;
-                            }
-                        }
-                        crossterm::event::KeyCode::Right => {
-                            if self.app.cursor < self.app.input.len() {
-                                self.app.cursor += 1;
-                            }
-                        }
-                        _ => {}
+                    }
+                    update_suggestions(self.app);
+                    let _ = self.redraw();
+                }
+                crossterm::event::KeyCode::Char(c) => {
+                    self.app.input.insert(self.app.cursor, c);
+                    self.app.cursor += 1;
+                    update_suggestions(self.app);
+                    let _ = self.redraw();
+                }
+                crossterm::event::KeyCode::Backspace => {
+                    if self.app.cursor > 0 {
+                        self.app.cursor -= 1;
+                        self.app.input.remove(self.app.cursor);
+                        update_suggestions(self.app);
+                        let _ = self.redraw();
                     }
                 }
+                crossterm::event::KeyCode::Left => {
+                    if self.app.cursor > 0 {
+                        self.app.cursor -= 1;
+                    }
+                }
+                crossterm::event::KeyCode::Right => {
+                    if self.app.cursor < self.app.input.len() {
+                        self.app.cursor += 1;
+                    }
+                }
+                _ => {}
             }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
+        Ok(false)
     }
 }
 
@@ -533,7 +641,8 @@ async fn send_message(
         content: agent::system_prompt(&app.meta.mode, app.worker.as_ref()).await,
     }];
     for bubble in &app.bubbles {
-        if bubble.role != "tool" {
+        // Tool bubbles and transient "thinking" bubbles are display-only.
+        if bubble.role != "tool" && bubble.role != "thinking" {
             messages.push(ChatMsg {
                 role: bubble.role.clone(),
                 content: bubble.content.clone(),
@@ -546,7 +655,14 @@ async fn send_message(
     let chat_id = app.chat_id.clone();
     let max_iterations = app.global_config.max_iterations;
 
-    let mut ui = TuiAgentUi { app, terminal };
+    let mut ui = TuiAgentUi {
+        app,
+        terminal,
+        think_idx: None,
+        answer_idx: None,
+        think_started: None,
+        think_done: false,
+    };
     let outcome = agent::run_turn(
         &mut ui,
         agent::TurnContext {

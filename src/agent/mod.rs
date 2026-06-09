@@ -10,14 +10,18 @@ mod ui;
 pub use format::{command_text, format_elapsed, pretty_tool_name, summarize_output, system_prompt};
 pub use ui::AgentUi;
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 
-use crate::ai::{AiClient, ChatMsg};
+use crate::ai::{AiClient, ChatMsg, StreamPiece};
 use crate::config::{ChatMessage, append_message};
 use crate::tools::{extract_tool_call, strip_tool_call};
 use crate::worker::Worker;
+
+/// How often, while awaiting the model or a tool, we pause to pump user input
+/// (so Esc-to-cancel and message queueing stay responsive).
+const INPUT_TICK: Duration = Duration::from_millis(40);
 
 /// Everything a single turn needs that is not part of the UI.
 pub struct TurnContext<'a> {
@@ -34,7 +38,7 @@ pub struct TurnContext<'a> {
 /// How a turn finished.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TurnOutcome {
-    /// Whether the user cancelled the turn (via [`AgentUi::wait_cancel`]).
+    /// Whether the user cancelled the turn (via [`AgentUi::poll_input`]).
     pub cancelled: bool,
 }
 
@@ -64,22 +68,44 @@ pub async fn run_turn(
             break;
         }
 
-        // Race the LLM request against a user cancellation.
-        let reply = tokio::select! {
-            res = ctx.ai.complete(messages.clone()) => res,
-            _ = ui.wait_cancel() => {
-                ui.set_status("Generation cancelled by user".to_string());
-                ui.assistant("[Generation cancelled]".to_string(), true);
-                cancelled = true;
-                break 'turn;
+        // Stream the model's reply into a live bubble. The returned String is
+        // the answer content only (reasoning excluded); cancellation is polled
+        // between chunks so Esc works mid-stream.
+        let stream_handle = ui.stream_begin();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<StreamPiece>();
+        let mut completion = std::pin::pin!(ctx.ai.complete_stream(messages.clone(), tx));
+
+        let reply = 'stream: loop {
+            tokio::select! {
+                res = &mut completion => {
+                    while let Ok(piece) = rx.try_recv() {
+                        ui.stream_push(stream_handle, &piece);
+                    }
+                    ui.redraw()?;
+                    break 'stream Some(res);
+                }
+                Some(piece) = rx.recv() => {
+                    ui.stream_push(stream_handle, &piece);
+                    ui.redraw()?;
+                }
+                _ = tokio::time::sleep(INPUT_TICK) => {}
+            }
+            if ui.poll_input().await? {
+                break 'stream None;
             }
         };
 
         let reply = match reply {
-            Ok(reply) => reply,
-            Err(e) => {
+            Some(Ok(reply)) => reply,
+            Some(Err(e)) => {
+                ui.stream_end(stream_handle, Some(format!("API error: {}", e)));
                 ui.set_status(format!("API error: {}", e));
-                ui.assistant(format!("API error: {}", e), false);
+                break 'turn;
+            }
+            None => {
+                ui.stream_end(stream_handle, Some("[Generation cancelled]".to_string()));
+                ui.set_status("Generation cancelled by user".to_string());
+                cancelled = true;
                 break 'turn;
             }
         };
@@ -95,18 +121,20 @@ pub async fn run_turn(
         });
 
         let Some(tool_call) = extract_tool_call(&reply) else {
-            // No tool call — this is the final answer.
-            ui.assistant(reply.clone(), false);
+            // No tool call — finalize the streamed bubble as the answer.
+            ui.stream_end(stream_handle, Some(reply.clone()));
             persist_assistant(ctx.chat_id, reply)?;
             break 'turn;
         };
 
-        // Show any prose that accompanied the tool call, then persist the
-        // full reply (JSON included) so history can replay it.
+        // The reply was a tool call: replace the streamed bubble with just the
+        // accompanying prose (drop it entirely if there was none), then persist
+        // the full reply (JSON included) so history can replay it.
         let stripped = strip_tool_call(&reply);
-        if !stripped.is_empty() {
-            ui.assistant(stripped, false);
-        }
+        ui.stream_end(
+            stream_handle,
+            (!stripped.is_empty()).then_some(stripped),
+        );
         persist_assistant(ctx.chat_id, reply)?;
         ui.redraw()?;
 
@@ -116,12 +144,22 @@ pub async fn run_turn(
         let handle = ui.tool_begin(format!("{}: {}\nRunning...", nice, cmd_text));
         ui.redraw()?;
 
-        // Race tool execution against cancellation too, so ESC works while a
+        // Race tool execution against cancellation too, so Esc works while a
         // (async) tool is in flight, not just while the model is thinking.
         let start = Instant::now();
-        let result = tokio::select! {
-            res = ctx.worker.execute(&tool_call) => res,
-            _ = ui.wait_cancel() => {
+        let mut exec = std::pin::pin!(ctx.worker.execute(&tool_call));
+        let result = 'exec: loop {
+            tokio::select! {
+                res = &mut exec => break 'exec Some(res),
+                _ = tokio::time::sleep(INPUT_TICK) => {}
+            }
+            if ui.poll_input().await? {
+                break 'exec None;
+            }
+        };
+        let result = match result {
+            Some(result) => result,
+            None => {
                 ui.tool_update(handle, format!("{}: {}\nCancelled", nice, cmd_text));
                 ui.set_status("Generation cancelled by user".to_string());
                 cancelled = true;
