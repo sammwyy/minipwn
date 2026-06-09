@@ -545,6 +545,24 @@ fn render_bubbles(f: &mut Frame, area: Rect, app: &App) {
         ]);
     }
 
+    if !app.queue.is_empty() {
+        let mut lines = vec![Line::from(Span::styled(
+            format!(" ⋯ {} queued (Esc to edit) ", app.queue.len()),
+            Style::default()
+                .fg(app.theme.secondary())
+                .add_modifier(Modifier::ITALIC),
+        ))];
+        for msg in &app.queue {
+            let preview: String = msg.chars().take(60).collect();
+            lines.push(Line::from(Span::styled(
+                format!("   • {}", preview),
+                Style::default().fg(app.theme.text_dim()),
+            )));
+        }
+        lines.push(Line::from(""));
+        bubble_info.push(lines);
+    }
+
     // Flatten to count total lines for scrolling
     let all_lines: Vec<Line> = bubble_info.iter().flatten().cloned().collect();
     let content_height = all_lines.len() as u16;

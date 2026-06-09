@@ -58,10 +58,14 @@ pub async fn handle_exec(
     State(_state): State<AppState>,
     Json(req): Json<ExecRequest>,
 ) -> Json<ExecResponse> {
+    // Run through `bash -c` so the full command line — pipes, &&/||, subshells,
+    // redirections, bash-only syntax — is interpreted as a shell would, inside
+    // the worker (e.g. the Docker container). Fall back to `sh` if bash is
+    // absent on the host.
     let output = if cfg!(target_os = "windows") {
         Command::new("cmd").args(["/C", &req.command]).output()
     } else {
-        Command::new("sh").args(["-c", &req.command]).output()
+        run_unix_shell(&req.command)
     };
 
     match output {
@@ -75,6 +79,17 @@ pub async fn handle_exec(
             stderr: e.to_string(),
             exit_code: -1,
         }),
+    }
+}
+
+/// Run a command line through `bash -c`, falling back to `sh -c` when bash is
+/// not installed on the host.
+fn run_unix_shell(command: &str) -> std::io::Result<std::process::Output> {
+    match Command::new("bash").args(["-c", command]).output() {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            Command::new("sh").args(["-c", command]).output()
+        }
+        other => other,
     }
 }
 

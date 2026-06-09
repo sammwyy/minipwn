@@ -31,6 +31,13 @@ pub struct TurnContext<'a> {
     pub max_iterations: usize,
 }
 
+/// How a turn finished.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TurnOutcome {
+    /// Whether the user cancelled the turn (via [`AgentUi::wait_cancel`]).
+    pub cancelled: bool,
+}
+
 /// Run one agent turn: repeatedly query the LLM, execute any tool it calls, and
 /// feed the result back until it produces a final answer (or limits are hit).
 ///
@@ -40,13 +47,14 @@ pub async fn run_turn(
     ui: &mut dyn AgentUi,
     ctx: TurnContext<'_>,
     mut messages: Vec<ChatMsg>,
-) -> Result<()> {
+) -> Result<TurnOutcome> {
     ui.set_thinking(true);
     ui.redraw()?;
 
+    let mut cancelled = false;
     let mut iterations = 0;
 
-    loop {
+    'turn: loop {
         iterations += 1;
         if iterations > ctx.max_iterations {
             ui.assistant(
@@ -62,7 +70,8 @@ pub async fn run_turn(
             _ = ui.wait_cancel() => {
                 ui.set_status("Generation cancelled by user".to_string());
                 ui.assistant("[Generation cancelled]".to_string(), true);
-                break;
+                cancelled = true;
+                break 'turn;
             }
         };
 
@@ -71,7 +80,7 @@ pub async fn run_turn(
             Err(e) => {
                 ui.set_status(format!("API error: {}", e));
                 ui.assistant(format!("API error: {}", e), false);
-                break;
+                break 'turn;
             }
         };
 
@@ -89,7 +98,7 @@ pub async fn run_turn(
             // No tool call — this is the final answer.
             ui.assistant(reply.clone(), false);
             persist_assistant(ctx.chat_id, reply)?;
-            break;
+            break 'turn;
         };
 
         // Show any prose that accompanied the tool call, then persist the
@@ -107,8 +116,18 @@ pub async fn run_turn(
         let handle = ui.tool_begin(format!("{}: {}\nRunning...", nice, cmd_text));
         ui.redraw()?;
 
+        // Race tool execution against cancellation too, so ESC works while a
+        // (async) tool is in flight, not just while the model is thinking.
         let start = Instant::now();
-        let result = ctx.worker.execute(&tool_call).await;
+        let result = tokio::select! {
+            res = ctx.worker.execute(&tool_call) => res,
+            _ = ui.wait_cancel() => {
+                ui.tool_update(handle, format!("{}: {}\nCancelled", nice, cmd_text));
+                ui.set_status("Generation cancelled by user".to_string());
+                cancelled = true;
+                break 'turn;
+            }
+        };
         let elapsed = start.elapsed();
 
         let full_result = format!(
@@ -139,7 +158,7 @@ pub async fn run_turn(
 
     ui.set_thinking(false);
     ui.redraw()?;
-    Ok(())
+    Ok(TurnOutcome { cancelled })
 }
 
 fn persist_assistant(chat_id: &str, content: String) -> Result<()> {

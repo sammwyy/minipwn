@@ -2,11 +2,13 @@
 
 mod paths;
 mod secrets;
+mod usage;
 mod worker_cfg;
 mod workspace;
 
 pub use paths::*;
 pub use secrets::*;
+pub use usage::*;
 pub use worker_cfg::*;
 pub use workspace::*;
 

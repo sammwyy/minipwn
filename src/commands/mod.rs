@@ -28,6 +28,7 @@ impl CommandRegistry {
                 Box::new(apikey::ApiKeyCommand {}),
                 Box::new(worker::WorkerCommand {}),
                 Box::new(mode::ModeCommand {}),
+                Box::new(usage::UsageCommand {}),
             ],
         }
     }
@@ -48,3 +49,4 @@ pub mod clear;
 pub mod apikey;
 pub mod worker;
 pub mod mode;
+pub mod usage;

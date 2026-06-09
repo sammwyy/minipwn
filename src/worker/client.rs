@@ -11,6 +11,13 @@ use crate::protocol::{
 };
 use crate::tools::{ToolCall, ToolResult};
 
+/// Timeout for lightweight health checks (ping / validate / info).
+const HEALTH_TIMEOUT: Duration = Duration::from_secs(3);
+/// Timeout for command/shell execution. Generous, since a single shell command
+/// (a scan, a build, a compound pipeline) can legitimately run for minutes.
+/// The user can always interrupt an in-flight command with Esc.
+const EXEC_TIMEOUT: Duration = Duration::from_secs(1800);
+
 /// Client for a remote MiniPWN worker instance.
 #[derive(Clone)]
 pub struct WorkerClient {
@@ -22,8 +29,11 @@ pub struct WorkerClient {
 impl WorkerClient {
     /// Create a new worker client.
     pub fn new(base_url: &str, secret: &str) -> Self {
+        // Only the *connection* is bounded by a short timeout; per-request
+        // timeouts (below) bound how long we wait for a response, so a slow
+        // shell command does not get killed at 3s like a health check would.
         let client = Client::builder()
-            .timeout(Duration::from_secs(3))
+            .connect_timeout(HEALTH_TIMEOUT)
             .build()
             .unwrap_or_else(|_| Client::new());
 
@@ -45,6 +55,7 @@ impl WorkerClient {
             .client
             .get(format!("{}/ping", self.base_url))
             .header("Authorization", self.auth_header())
+            .timeout(HEALTH_TIMEOUT)
             .send()
             .await?
             .error_for_status()?
@@ -59,6 +70,7 @@ impl WorkerClient {
             .client
             .get(format!("{}/validate", self.base_url))
             .header("Authorization", self.auth_header())
+            .timeout(HEALTH_TIMEOUT)
             .send()
             .await?
             .error_for_status()?
@@ -73,6 +85,7 @@ impl WorkerClient {
             .client
             .get(format!("{}/info", self.base_url))
             .header("Authorization", self.auth_header())
+            .timeout(HEALTH_TIMEOUT)
             .send()
             .await?
             .error_for_status()?
@@ -106,6 +119,7 @@ impl WorkerClient {
             .post(format!("{}/exec", self.base_url))
             .header("Authorization", self.auth_header())
             .json(&json!({ "command": command }))
+            .timeout(EXEC_TIMEOUT)
             .send()
             .await?
             .error_for_status()?
@@ -131,6 +145,7 @@ impl WorkerClient {
             .post(format!("{}/shell/open", self.base_url))
             .header("Authorization", self.auth_header())
             .json(&json!({ "id": id }))
+            .timeout(EXEC_TIMEOUT)
             .send()
             .await?
             .error_for_status()?
@@ -160,6 +175,7 @@ impl WorkerClient {
             .post(format!("{}/shell/write", self.base_url))
             .header("Authorization", self.auth_header())
             .json(&json!({ "id": id, "input": input }))
+            .timeout(EXEC_TIMEOUT)
             .send()
             .await?
             .json()
@@ -183,6 +199,7 @@ impl WorkerClient {
             .post(format!("{}/shell/read", self.base_url))
             .header("Authorization", self.auth_header())
             .json(&json!({ "id": id }))
+            .timeout(EXEC_TIMEOUT)
             .send()
             .await?
             .json()
@@ -203,6 +220,7 @@ impl WorkerClient {
             .post(format!("{}/shell/close", self.base_url))
             .header("Authorization", self.auth_header())
             .json(&json!({ "id": id }))
+            .timeout(EXEC_TIMEOUT)
             .send()
             .await?
             .json()

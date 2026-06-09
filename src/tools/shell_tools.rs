@@ -25,10 +25,17 @@ impl ShellRegistry {
 
 /// Execute a one-shot shell command and return its combined output.
 pub fn shell_exec_local(command: &str) -> ToolResult {
+    // Interpret the whole command line through bash (pipes, &&/||, subshells,
+    // bash-only syntax), falling back to sh if bash is not installed.
     let output = if cfg!(target_os = "windows") {
         Command::new("cmd").args(["/C", command]).output()
     } else {
-        Command::new("sh").args(["-c", command]).output()
+        match Command::new("bash").args(["-c", command]).output() {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                Command::new("sh").args(["-c", command]).output()
+            }
+            other => other,
+        }
     };
 
     match output {

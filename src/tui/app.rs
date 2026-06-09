@@ -11,7 +11,7 @@ use crate::commands::CommandRegistry;
 use crate::config::{
     ChatMessage, GlobalConfig, Provider, SavedWorker, Secrets, WorkersList, WorkspaceMeta,
     WorkspaceStats, add_tokens, append_message, init_config_dirs, load_chat, load_global_config,
-    load_workers_list, load_workspace_meta, load_workspace_stats, save_workers_list,
+    load_workers_list, load_workspace_meta, load_workspace_stats, record_usage, save_workers_list,
 };
 use crate::agent::{self, AgentUi};
 use crate::tui::theme::{Theme, ThemeRegistry};
@@ -80,6 +80,8 @@ pub struct App {
     pub input_history_pos: usize,
     pub suggestions: Vec<String>,
     pub modal: Option<ModalState>,
+    /// Messages typed while a turn is running, sent in order once it ends.
+    pub queue: Vec<String>,
 }
 
 impl App {}
@@ -186,6 +188,7 @@ pub async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Resul
         input_history_pos: 0,
         suggestions: vec![],
         modal: None,
+        queue: vec![],
     };
 
     loop {
@@ -273,42 +276,13 @@ pub async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Resul
                         app.cursor = 0;
                         app.suggestions.clear();
 
-                        if input.starts_with('/') {
-                            // Handle modular command
-                            let parts: Vec<&str> = input.split_whitespace().collect();
-                            let cmd_name = parts[0].trim_start_matches('/');
-                            let args = &parts[1..];
-
-                            let registry = CommandRegistry::new();
-                            if let Some(cmd) = registry.find(cmd_name) {
-                                match cmd.execute(&mut app, cmd_name, args).await {
-                                    Ok(result) => {
-                                        if !result.is_empty() {
-                                            app.bubbles.push(Bubble {
-                                                role: "assistant".to_string(),
-                                                content: result,
-                                                is_ephemeral: true,
-                                            });
-                                        }
-                                    }
-                                    Err(e) => {
-                                        app.bubbles.push(Bubble {
-                                            role: "assistant".to_string(),
-                                            content: format!("Command error: {}", e),
-                                            is_ephemeral: true,
-                                        });
-                                    }
-                                }
-                            } else {
-                                app.bubbles.push(Bubble {
-                                    role: "assistant".to_string(),
-                                    content: format!("Unknown command: /{}", cmd_name),
-                                    is_ephemeral: true,
-                                });
-                            }
-                        } else {
-                            // Send message to AI
-                            send_message(&mut app, terminal, &input).await?;
+                        // Dispatch the submitted line, then drain any messages
+                        // the user queued while turns were running (FIFO). A
+                        // cancelled turn stops the drain and keeps the queue.
+                        let mut cancelled = dispatch_input(&mut app, terminal, &input).await?;
+                        while !cancelled && !app.queue.is_empty() {
+                            let next = app.queue.remove(0);
+                            cancelled = dispatch_input(&mut app, terminal, &next).await?;
                         }
                     }
                     KeyCode::Char(c) => {
@@ -372,6 +346,16 @@ pub async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Resul
                     KeyCode::PageDown => {
                         app.scroll_offset = app.scroll_offset.saturating_sub(5);
                     }
+                    KeyCode::Esc => {
+                        // Cancel the pending queue: pull it back into the input
+                        // for editing or discarding.
+                        if !app.queue.is_empty() {
+                            app.input = app.queue.join("\n");
+                            app.queue.clear();
+                            app.cursor = app.input.len();
+                            update_suggestions(&mut app);
+                        }
+                    }
 
                     _ => {}
                 }
@@ -427,6 +411,7 @@ impl AgentUi for TuiAgentUi<'_> {
 
     fn record_tokens(&mut self, count: u64) {
         let _ = add_tokens(count);
+        let _ = record_usage(&self.app.chat_id, count);
         self.app.stats.total_tokens += count;
     }
 
@@ -443,15 +428,61 @@ impl AgentUi for TuiAgentUi<'_> {
         Ok(())
     }
 
+    /// While a turn runs, keep the input live: typed text is editable and
+    /// Enter queues it for the next turn. Resolves only when the user asks to
+    /// cancel (Esc / Ctrl-C), which is what stops the in-flight generation.
     async fn wait_cancel(&mut self) {
         loop {
             if crossterm::event::poll(std::time::Duration::from_millis(50)).unwrap_or(false) {
                 if let Ok(crossterm::event::Event::Key(k)) = crossterm::event::read() {
-                    if k.code == crossterm::event::KeyCode::Esc
-                        || (k.code == crossterm::event::KeyCode::Char('c')
-                            && k.modifiers.contains(crossterm::event::KeyModifiers::CONTROL))
-                    {
-                        return;
+                    match k.code {
+                        crossterm::event::KeyCode::Esc => return,
+                        crossterm::event::KeyCode::Char('c')
+                            if k.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) =>
+                        {
+                            return;
+                        }
+                        crossterm::event::KeyCode::Enter => {
+                            let line = self.app.input.trim().to_string();
+                            self.app.input.clear();
+                            self.app.cursor = 0;
+                            if !line.is_empty() {
+                                if line.starts_with('/') {
+                                    // Commands run immediately, even mid-turn.
+                                    run_command(self.app, &line).await;
+                                } else {
+                                    // Plain messages wait for the next turn.
+                                    self.app.queue.push(line);
+                                }
+                            }
+                            update_suggestions(self.app);
+                            let _ = self.redraw();
+                        }
+                        crossterm::event::KeyCode::Char(c) => {
+                            self.app.input.insert(self.app.cursor, c);
+                            self.app.cursor += 1;
+                            update_suggestions(self.app);
+                            let _ = self.redraw();
+                        }
+                        crossterm::event::KeyCode::Backspace => {
+                            if self.app.cursor > 0 {
+                                self.app.cursor -= 1;
+                                self.app.input.remove(self.app.cursor);
+                                update_suggestions(self.app);
+                                let _ = self.redraw();
+                            }
+                        }
+                        crossterm::event::KeyCode::Left => {
+                            if self.app.cursor > 0 {
+                                self.app.cursor -= 1;
+                            }
+                        }
+                        crossterm::event::KeyCode::Right => {
+                            if self.app.cursor < self.app.input.len() {
+                                self.app.cursor += 1;
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -465,7 +496,7 @@ async fn send_message(
     app: &mut App,
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     content: &str,
-) -> Result<()> {
+) -> Result<agent::TurnOutcome> {
     // Record the user's message.
     app.bubbles.push(Bubble {
         role: "user".to_string(),
@@ -491,7 +522,7 @@ async fn send_message(
                 content: format!("Error: {}. Use /provider and /apikey to configure.", e),
                 is_ephemeral: false,
             });
-            return Ok(());
+            return Ok(agent::TurnOutcome::default());
         }
     };
 
@@ -515,7 +546,7 @@ async fn send_message(
     let max_iterations = app.global_config.max_iterations;
 
     let mut ui = TuiAgentUi { app, terminal };
-    agent::run_turn(
+    let outcome = agent::run_turn(
         &mut ui,
         agent::TurnContext {
             ai: &ai_client,
@@ -530,7 +561,46 @@ async fn send_message(
     // Ephemeral bubbles stay on screen but are never persisted, so they vanish
     // on the next launch (which only reloads messages from disk).
     ui.app.scroll_offset = 0;
-    Ok(())
+    Ok(outcome)
+}
+
+/// Dispatch one submitted line: run it as a slash command or as an agent turn.
+/// Returns whether an agent turn was cancelled by the user.
+async fn dispatch_input(
+    app: &mut App,
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    input: &str,
+) -> Result<bool> {
+    if input.starts_with('/') {
+        run_command(app, input).await;
+        Ok(false)
+    } else {
+        Ok(send_message(app, terminal, input).await?.cancelled)
+    }
+}
+
+/// Execute a slash command and surface its output as an ephemeral bubble.
+async fn run_command(app: &mut App, input: &str) {
+    let parts: Vec<&str> = input.split_whitespace().collect();
+    let cmd_name = parts[0].trim_start_matches('/');
+    let args = &parts[1..];
+
+    let registry = CommandRegistry::new();
+    let content = if let Some(cmd) = registry.find(cmd_name) {
+        match cmd.execute(app, cmd_name, args).await {
+            Ok(result) if result.is_empty() => return,
+            Ok(result) => result,
+            Err(e) => format!("Command error: {}", e),
+        }
+    } else {
+        format!("Unknown command: /{}", cmd_name)
+    };
+
+    app.bubbles.push(Bubble {
+        role: "assistant".to_string(),
+        content,
+        is_ephemeral: true,
+    });
 }
 
 fn update_suggestions(app: &mut App) {
