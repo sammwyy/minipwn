@@ -1,12 +1,14 @@
 //! Configuration management: global config dir, worker config, secrets, workspace.
 
 mod paths;
+mod providers;
 mod secrets;
 mod usage;
 mod worker_cfg;
 mod workspace;
 
 pub use paths::*;
+pub use providers::*;
 pub use secrets::*;
 pub use usage::*;
 pub use worker_cfg::*;
@@ -92,6 +94,9 @@ OPENAI_MODEL=""
 OPENROUTER_ENDPOINT="https://openrouter.ai/api/v1"
 OPENROUTER_SECRETKEY=""
 OPENROUTER_MODEL=""
+OPENCODE_ENDPOINT="https://opencode.ai/zen/go/v1"
+OPENCODE_SECRETKEY=""
+OPENCODE_MODEL=""
 CUSTOM_ENDPOINT=""
 CUSTOM_SECRETKEY=""
 CUSTOM_MODEL=""

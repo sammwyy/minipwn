@@ -5,49 +5,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use super::paths::secrets_env_path;
-
-/// Provider identifier.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Provider {
-    OpenAI,
-    OpenRouter,
-    Custom,
-}
-
-impl Provider {
-    pub fn prefix(&self) -> &'static str {
-        match self {
-            Provider::OpenAI => "OPENAI",
-            Provider::OpenRouter => "OPENROUTER",
-            Provider::Custom => "CUSTOM",
-        }
-    }
-
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s.to_lowercase().as_str() {
-            "openai" => Some(Provider::OpenAI),
-            "openrouter" => Some(Provider::OpenRouter),
-            "custom" => Some(Provider::Custom),
-            _ => None,
-        }
-    }
-
-    pub fn display_name(&self) -> &'static str {
-        match self {
-            Provider::OpenAI => "OpenAI",
-            Provider::OpenRouter => "OpenRouter",
-            Provider::Custom => "Custom",
-        }
-    }
-
-    pub fn default_endpoint(&self) -> &'static str {
-        match self {
-            Provider::OpenAI => "https://api.openai.com/v1",
-            Provider::OpenRouter => "https://openrouter.ai/api/v1",
-            Provider::Custom => "",
-        }
-    }
-}
+use super::providers::Provider;
 
 /// Parsed secrets from secrets.env.
 #[derive(Debug, Default)]
@@ -94,12 +52,12 @@ impl Secrets {
     }
 
     /// Get provider-specific secret key.
-    pub fn api_key(&self, provider: &Provider) -> Option<&str> {
+    pub fn api_key(&self, provider: &dyn Provider) -> Option<&str> {
         self.get(&format!("{}_SECRETKEY", provider.prefix()))
     }
 
     /// Get provider-specific endpoint.
-    pub fn endpoint(&self, provider: &Provider) -> String {
+    pub fn endpoint(&self, provider: &dyn Provider) -> String {
         self.get(&format!("{}_ENDPOINT", provider.prefix()))
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string())
@@ -107,13 +65,13 @@ impl Secrets {
     }
 
     /// Get provider-specific model.
-    pub fn model(&self, provider: &Provider) -> Option<&str> {
+    pub fn model(&self, provider: &dyn Provider) -> Option<&str> {
         self.get(&format!("{}_MODEL", provider.prefix()))
             .filter(|s| !s.is_empty())
     }
 
     /// Set provider-specific secret key.
-    pub fn set_key(&mut self, provider: &Provider, key: &str) {
+    pub fn set_key(&mut self, provider: &dyn Provider, key: &str) {
         self.values
             .insert(format!("{}_SECRETKEY", provider.prefix()), key.to_string());
     }

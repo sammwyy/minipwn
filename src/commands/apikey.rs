@@ -19,7 +19,7 @@ impl Command for ApiKeyCommand {
 
         let key = args[0];
         let mut secrets = Secrets::load().unwrap_or_default();
-        secrets.set_key(&app.provider, key);
+        secrets.set_key(app.provider.as_ref(), key);
         secrets.save()?;
         app.secrets = secrets;
 

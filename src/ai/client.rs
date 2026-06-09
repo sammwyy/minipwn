@@ -16,7 +16,7 @@ pub struct AiClient {
 
 impl AiClient {
     /// Construct from the active provider settings in secrets.
-    pub fn from_secrets(secrets: &Secrets, provider: &Provider) -> Result<Self> {
+    pub fn from_secrets(secrets: &Secrets, provider: &dyn Provider) -> Result<Self> {
         let api_key = secrets
             .api_key(provider)
             .filter(|k| !k.is_empty())
@@ -86,5 +86,44 @@ impl AiClient {
         let mut ids: Vec<String> = resp.data.into_iter().map(|m| m.id).collect();
         ids.sort();
         Ok(ids)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ai::ChatMsg;
+    use crate::config::{OpenCode, Secrets};
+
+    // Live check against OpenCode Zen. Ignored by default (needs network + a
+    // key). Run with:
+    //   OPENCODE_TEST_KEY=sk-... cargo test --bin minipwn -- --ignored opencode_live --nocapture
+    #[tokio::test]
+    #[ignore]
+    async fn opencode_live() {
+        let key = std::env::var("OPENCODE_TEST_KEY").expect("set OPENCODE_TEST_KEY");
+        let mut secrets = Secrets::default();
+        secrets
+            .values
+            .insert("OPENCODE_SECRETKEY".into(), key);
+        secrets
+            .values
+            .insert("OPENCODE_MODEL".into(), "glm-5".into());
+
+        let client = AiClient::from_secrets(&secrets, &OpenCode).expect("client");
+        assert_eq!(client.model, "glm-5");
+
+        let models = client.list_models().await.expect("list_models");
+        assert!(models.iter().any(|m| m == "glm-5"), "models: {:?}", models);
+
+        let reply = client
+            .complete(vec![ChatMsg {
+                role: "user".into(),
+                content: "Reply with exactly one word: pong".into(),
+            }])
+            .await
+            .expect("complete");
+        assert!(!reply.trim().is_empty(), "empty reply");
+        println!("opencode reply = {:?}", reply);
     }
 }

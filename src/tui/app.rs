@@ -10,8 +10,9 @@ use crate::ai::{AiClient, ChatMsg};
 use crate::commands::CommandRegistry;
 use crate::config::{
     ChatMessage, GlobalConfig, Provider, SavedWorker, Secrets, WorkersList, WorkspaceMeta,
-    WorkspaceStats, add_tokens, append_message, init_config_dirs, load_chat, load_global_config,
-    load_workers_list, load_workspace_meta, load_workspace_stats, record_usage, save_workers_list,
+    WorkspaceStats, add_tokens, append_message, default_provider, init_config_dirs, load_chat,
+    load_global_config, load_workers_list, load_workspace_meta, load_workspace_stats,
+    provider_from_id, record_usage, save_workers_list,
 };
 use crate::agent::{self, AgentUi};
 use crate::tui::theme::{Theme, ThemeRegistry};
@@ -66,7 +67,7 @@ pub struct App {
     pub input: String,
     pub cursor: usize,
     pub status: String,
-    pub provider: Provider,
+    pub provider: Box<dyn Provider>,
     pub secrets: Secrets,
     pub meta: WorkspaceMeta,
     pub stats: WorkspaceStats,
@@ -110,7 +111,7 @@ pub async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Resul
     let meta = load_workspace_meta().unwrap_or_default();
     let stats = load_workspace_stats().unwrap_or_default();
     let secrets = Secrets::load().unwrap_or_default();
-    let provider = Provider::from_str(&global_config.provider).unwrap_or(Provider::OpenAI);
+    let provider = provider_from_id(&global_config.provider).unwrap_or_else(default_provider);
 
     // Load recent chat history (last 10 messages)
     let session = load_chat(&meta.current_chat).unwrap_or_else(|_| crate::config::ChatSession {
@@ -513,7 +514,7 @@ async fn send_message(
     )?;
 
     // Build the AI client (surfacing config errors as a chat bubble).
-    let ai_client = match AiClient::from_secrets(&app.secrets, &app.provider) {
+    let ai_client = match AiClient::from_secrets(&app.secrets, app.provider.as_ref()) {
         Ok(c) => c,
         Err(e) => {
             app.status = format!("AI error: {}", e);

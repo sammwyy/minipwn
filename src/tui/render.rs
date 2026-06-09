@@ -688,7 +688,7 @@ fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
     let provider_name = app.provider.display_name().to_uppercase();
     let model_name = app
         .secrets
-        .model(&app.provider)
+        .model(app.provider.as_ref())
         .unwrap_or("GPT-4O-MINI")
         .to_uppercase();
 

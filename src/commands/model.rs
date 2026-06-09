@@ -31,7 +31,7 @@ impl Command for ModelCommand {
 
         // Fetch models from provider
         let mut items = Vec::new();
-        if let Ok(client) = crate::ai::AiClient::from_secrets(&app.secrets, &app.provider) {
+        if let Ok(client) = crate::ai::AiClient::from_secrets(&app.secrets, app.provider.as_ref()) {
             app.status = format!("Fetching models from {}...", app.provider.display_name());
             if let Ok(models) = client.list_models().await {
                 items = models
