@@ -1,6 +1,8 @@
 //! Worker mode: HTTP server exposing shell and system info endpoints.
 
 pub mod client;
+pub mod discovery;
+pub mod docker;
 mod handlers;
 mod routes;
 mod state;
@@ -25,6 +27,13 @@ pub async fn run(
     println!("MiniPWN Worker starting on {}", addr);
     println!("Secret: {}", cfg.server.secret);
     println!("Config: {}", cfg_path.display());
+
+    let discovery_cfg = cfg.clone();
+    tokio::spawn(async move {
+        if let Err(err) = discovery::serve(discovery_cfg).await {
+            tracing::warn!("Worker discovery server stopped: {}", err);
+        }
+    });
 
     let app = routes::build_router(cfg);
     let listener = tokio::net::TcpListener::bind(addr).await?;

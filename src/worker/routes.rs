@@ -19,6 +19,8 @@ pub fn build_router(config: WorkerConfig) -> Router {
     let state = AppState::new(config);
 
     Router::new()
+        .route("/ping", get(handle_ping))
+        .route("/validate", get(handle_validate))
         .route("/info", get(handle_info))
         .route("/exec", post(handle_exec))
         .route("/shell/open", post(handle_shell_open))

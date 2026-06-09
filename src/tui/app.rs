@@ -1,20 +1,21 @@
 //! Application state and main event loop.
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::io::Stdout;
 use std::time::Duration;
 
 use crate::ai::{AiClient, ChatMsg};
-use crate::config::{
-    ChatMessage, Provider, SavedWorker, Secrets, WorkersList, WorkspaceMeta, append_message, load_chat, load_workers_list, load_workspace_meta,
-    save_workers_list, init_config_dirs, load_global_config, GlobalConfig, WorkspaceStats, load_workspace_stats, add_tokens,
-};
 use crate::commands::CommandRegistry;
 use crate::config::load_system_prompt;
-use crate::tui::theme::{Theme, ThemeRegistry};
+use crate::config::{
+    ChatMessage, GlobalConfig, Provider, SavedWorker, Secrets, WorkersList, WorkspaceMeta,
+    WorkspaceStats, add_tokens, append_message, init_config_dirs, load_chat, load_global_config,
+    load_workers_list, load_workspace_meta, load_workspace_stats, save_workers_list,
+};
 use crate::tools::{ExecutionMode, extract_tool_call};
+use crate::tui::theme::{Theme, ThemeRegistry};
 use crate::worker::client::WorkerClient;
 
 use super::render::render_ui;
@@ -92,15 +93,17 @@ pub async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Resul
 
     // Setup themes
     let theme_registry = ThemeRegistry::load();
-    let theme = theme_registry.get(&global_config.theme)
+    let theme = theme_registry
+        .get(&global_config.theme)
         .cloned()
         .unwrap_or_else(|| theme_registry.get("dracula").unwrap().clone());
 
     // Show worker selection screen
     let workers = load_workers_list().unwrap_or_default();
     let choice = worker_select_screen(terminal, &workers, &theme).await?;
+    let workers = load_workers_list().unwrap_or_default();
 
-    let execution_mode = build_execution_mode(choice, &workers).await?;
+    let execution_mode = build_execution_mode(choice, &workers, terminal, &theme).await?;
 
     // Load workspace state
     let meta = load_workspace_meta().unwrap_or_default();
@@ -116,7 +119,7 @@ pub async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Resul
 
     let mut bubbles = Vec::new();
     let history_messages: Vec<_> = session.messages.iter().rev().take(20).rev().collect();
-    
+
     for m in history_messages {
         if m.role == "assistant" {
             let stripped = crate::tools::strip_tool_call(&m.content);
@@ -131,13 +134,17 @@ pub async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Resul
             let rest = &m.content["Tool result:\n[Tool: ".len()..];
             if let Some(bracket_idx) = rest.find(']') {
                 let tool_name = &rest[..bracket_idx];
-                let nice_tool_name = tool_name.split('_').map(|s| {
-                    let mut c = s.chars();
-                    match c.next() {
-                        None => String::new(),
-                        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
-                    }
-                }).collect::<Vec<_>>().join(" ");
+                let nice_tool_name = tool_name
+                    .split('_')
+                    .map(|s| {
+                        let mut c = s.chars();
+                        match c.next() {
+                            None => String::new(),
+                            Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ");
 
                 let rest2 = &rest[bracket_idx + 2..];
                 if let Some(newline_idx) = rest2.find('\n') {
@@ -149,8 +156,12 @@ pub async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Resul
                         brief = format!("{}...", brief.chars().take(32).collect::<String>());
                     }
 
-                    let status_prefix = if status_str == "OK" { "Success:" } else { "Error:" };
-                    
+                    let status_prefix = if status_str == "OK" {
+                        "Success:"
+                    } else {
+                        "Error:"
+                    };
+
                     bubbles.push(Bubble {
                         role: "tool".to_string(),
                         content: format!("{}\n{} {}", nice_tool_name, status_prefix, brief),
@@ -217,13 +228,29 @@ pub async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Resul
                             }
                         }
                         KeyCode::Down => {
-                            let filtered_count = modal.items.iter().filter(|i| i.label.to_lowercase().contains(&modal.filter.to_lowercase())).count();
+                            let filtered_count = modal
+                                .items
+                                .iter()
+                                .filter(|i| {
+                                    i.label
+                                        .to_lowercase()
+                                        .contains(&modal.filter.to_lowercase())
+                                })
+                                .count();
                             if modal.selected + 1 < filtered_count {
                                 modal.selected += 1;
                             }
                         }
                         KeyCode::Enter => {
-                            let filtered: Vec<_> = modal.items.iter().filter(|i| i.label.to_lowercase().contains(&modal.filter.to_lowercase())).collect();
+                            let filtered: Vec<_> = modal
+                                .items
+                                .iter()
+                                .filter(|i| {
+                                    i.label
+                                        .to_lowercase()
+                                        .contains(&modal.filter.to_lowercase())
+                                })
+                                .collect();
                             if let Some(item) = filtered.get(modal.selected) {
                                 let id = item.id.clone();
                                 let callback = modal.callback.clone();
@@ -442,7 +469,8 @@ async fn send_message(
         if iterations > max_iterations {
             app.bubbles.push(Bubble {
                 role: "assistant".to_string(),
-                content: "[Max tool iterations reached. Type 'Continue' to keep going.]".to_string(),
+                content: "[Max tool iterations reached. Type 'Continue' to keep going.]"
+                    .to_string(),
                 is_ephemeral: false,
             });
             break;
@@ -454,7 +482,7 @@ async fn send_message(
                 loop {
                     if crossterm::event::poll(std::time::Duration::from_millis(50)).unwrap_or(false) {
                         if let Ok(crossterm::event::Event::Key(k)) = crossterm::event::read() {
-                            if k.code == crossterm::event::KeyCode::Esc || 
+                            if k.code == crossterm::event::KeyCode::Esc ||
                                (k.code == crossterm::event::KeyCode::Char('c') && k.modifiers.contains(crossterm::event::KeyModifiers::CONTROL)) {
                                 break;
                             }
@@ -511,7 +539,7 @@ async fn send_message(
                     is_ephemeral: false,
                 });
             }
-            
+
             append_message(
                 &app.chat_id,
                 ChatMessage {
@@ -523,16 +551,26 @@ async fn send_message(
 
             terminal.draw(|f| render_ui(f, app))?;
 
-            let nice_tool_name = tool_call.tool.split('_').map(|s| {
-                let mut c = s.chars();
-                match c.next() {
-                    None => String::new(),
-                    Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
-                }
-            }).collect::<Vec<_>>().join(" ");
+            let nice_tool_name = tool_call
+                .tool
+                .split('_')
+                .map(|s| {
+                    let mut c = s.chars();
+                    match c.next() {
+                        None => String::new(),
+                        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
 
             let cmd_text = if tool_call.tool == "shell_exec" {
-                tool_call.args.get("command").and_then(|v| v.as_str()).unwrap_or("").to_string()
+                tool_call
+                    .args
+                    .get("command")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string()
             } else {
                 tool_call.args.to_string()
             };
@@ -569,7 +607,7 @@ async fn send_message(
             let time_str = format!("{:02}:{:02}.{:03}", secs / 60, secs % 60, ms);
 
             let status_prefix = if result.success { "Success:" } else { "Error:" };
-            
+
             app.bubbles[tool_bubble_idx].content = format!(
                 "{}: {}\n{} {} ({})",
                 nice_tool_name, cmd_text, status_prefix, brief, time_str
@@ -622,11 +660,14 @@ fn update_suggestions(app: &mut App) {
     let registry = CommandRegistry::new();
     let commands = registry.commands;
 
-    let mut filtered: Vec<String> = commands.iter()
-        .filter(|c| c.name().starts_with(cmd_part) || c.aliases().iter().any(|a| a.starts_with(cmd_part)))
+    let mut filtered: Vec<String> = commands
+        .iter()
+        .filter(|c| {
+            c.name().starts_with(cmd_part) || c.aliases().iter().any(|a| a.starts_with(cmd_part))
+        })
         .map(|c| format!("{} | {}", c.usage(), c.description()))
         .collect();
-    
+
     // Optional: Sort or limit
     filtered.sort();
     app.suggestions = filtered;
@@ -658,6 +699,8 @@ async fn build_system_prompt(app: &App) -> String {
 async fn build_execution_mode(
     choice: WorkerChoice,
     workers: &WorkersList,
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    theme: &Theme,
 ) -> Result<ExecutionMode> {
     let workspace = std::env::current_dir()?
         .join(".minipwn")
@@ -667,22 +710,63 @@ async fn build_execution_mode(
 
     match choice {
         WorkerChoice::NoWorker => Ok(ExecutionMode::Local { workspace }),
+        WorkerChoice::DockerKali => {
+            let docker_worker =
+                super::worker_select::docker_deploy_screen(terminal, theme, &workspace).await?;
+            let client = WorkerClient::new(&docker_worker.url, &docker_worker.secret);
+            let validation = client.validate().await?;
+            if !validation.ok || !validation.secret_valid {
+                bail!(
+                    "Kali Docker worker validation failed for {}",
+                    docker_worker.url
+                );
+            }
+
+            let mut list = load_workers_list().unwrap_or_default();
+            if let Some(existing) = list.workers.iter_mut().find(|w| w.url == docker_worker.url) {
+                existing.name = docker_worker.name;
+                existing.secret = docker_worker.secret;
+            } else {
+                list.workers.push(SavedWorker {
+                    name: docker_worker.name,
+                    url: docker_worker.url.clone(),
+                    secret: docker_worker.secret,
+                });
+            }
+            let _ = save_workers_list(&list);
+
+            Ok(ExecutionMode::Remote { client, workspace })
+        }
         WorkerChoice::Saved(idx) => {
             let w = &workers.workers[idx];
             let client = WorkerClient::new(&w.url, &w.secret);
+            let validation = client.validate().await?;
+            if !validation.ok || !validation.secret_valid {
+                bail!("Worker validation failed for {}", w.url);
+            }
             Ok(ExecutionMode::Remote { client, workspace })
         }
         WorkerChoice::New { url, secret, name } => {
+            let client = WorkerClient::new(&url, &secret);
+            let validation = client.validate().await?;
+            if !validation.ok || !validation.secret_valid {
+                bail!("Worker validation failed for {}", url);
+            }
+
             // Save the new worker
             let mut list = load_workers_list().unwrap_or_default();
-            list.workers.push(SavedWorker {
-                name,
-                url: url.clone(),
-                secret: secret.clone(),
-            });
+            if let Some(existing) = list.workers.iter_mut().find(|w| w.url == url) {
+                existing.name = name;
+                existing.secret = secret;
+            } else {
+                list.workers.push(SavedWorker {
+                    name,
+                    url: url.clone(),
+                    secret,
+                });
+            }
             let _ = save_workers_list(&list);
 
-            let client = WorkerClient::new(&url, &secret);
             Ok(ExecutionMode::Remote { client, workspace })
         }
     }

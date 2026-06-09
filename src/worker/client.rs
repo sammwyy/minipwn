@@ -3,6 +3,7 @@
 use anyhow::Result;
 use reqwest::Client;
 use serde_json::json;
+use std::time::Duration;
 
 use crate::tools::{ToolCall, ToolResult};
 
@@ -24,19 +25,69 @@ pub struct WorkerInfo {
     pub cwd: String,
 }
 
+/// Response returned by the worker /ping endpoint.
+#[derive(Debug, serde::Deserialize)]
+pub struct PingResponse {
+    pub pong: bool,
+    pub worker: String,
+    pub port: u16,
+}
+
+/// Response returned by the worker /validate endpoint.
+#[derive(Debug, serde::Deserialize)]
+pub struct WorkerValidation {
+    pub ok: bool,
+    pub secret_valid: bool,
+    pub secret_len: usize,
+    pub info: WorkerInfo,
+}
+
 impl WorkerClient {
     /// Create a new worker client.
     pub fn new(base_url: &str, secret: &str) -> Self {
+        let client = Client::builder()
+            .timeout(Duration::from_secs(3))
+            .build()
+            .unwrap_or_else(|_| Client::new());
+
         Self {
             base_url: base_url.trim_end_matches('/').to_string(),
             secret: secret.to_string(),
-            client: Client::new(),
+            client,
         }
     }
 
     /// Build an authorized request builder.
     fn auth_header(&self) -> String {
         format!("Bearer {}", self.secret)
+    }
+
+    /// Ping the worker to check whether it is alive and the secret is accepted.
+    pub async fn ping(&self) -> Result<PingResponse> {
+        let resp = self
+            .client
+            .get(format!("{}/ping", self.base_url))
+            .header("Authorization", self.auth_header())
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<PingResponse>()
+            .await?;
+        Ok(resp)
+    }
+
+    /// Validate the worker secret and fetch metadata before connecting.
+    pub async fn validate(&self) -> Result<WorkerValidation> {
+        let resp = self
+            .client
+            .get(format!("{}/validate", self.base_url))
+            .header("Authorization", self.auth_header())
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<WorkerValidation>()
+            .await?;
+        Ok(resp)
     }
 
     /// Ping the worker and fetch its system info.

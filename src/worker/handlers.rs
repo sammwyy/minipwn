@@ -22,6 +22,33 @@ pub async fn handle_info(State(state): State<AppState>) -> Json<WorkerInfo> {
     })
 }
 
+/// GET /ping — Lightweight authenticated liveness check.
+pub async fn handle_ping(State(state): State<AppState>) -> Json<PingResponse> {
+    Json(PingResponse {
+        pong: true,
+        worker: format!("worker:{}", state.config.server.port),
+        port: state.config.server.port,
+    })
+}
+
+/// GET /validate — Validate auth and return worker metadata.
+pub async fn handle_validate(State(state): State<AppState>) -> Json<ValidateResponse> {
+    Json(ValidateResponse {
+        ok: true,
+        secret_valid: true,
+        secret_len: state.config.server.secret.len(),
+        info: WorkerInfo {
+            os: std::env::consts::OS.to_string(),
+            arch: std::env::consts::ARCH.to_string(),
+            family: std::env::consts::FAMILY.to_string(),
+            hostname: format!("worker:{}", state.config.server.port),
+            cwd: std::env::current_dir()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default(),
+        },
+    })
+}
+
 /// POST /exec — Execute a one-shot shell command.
 pub async fn handle_exec(
     State(_state): State<AppState>,
@@ -190,6 +217,21 @@ pub struct WorkerInfo {
     pub cwd: String,
 }
 
+#[derive(Debug, Serialize)]
+pub struct PingResponse {
+    pub pong: bool,
+    pub worker: String,
+    pub port: u16,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ValidateResponse {
+    pub ok: bool,
+    pub secret_valid: bool,
+    pub secret_len: usize,
+    pub info: WorkerInfo,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ExecRequest {
     pub command: String,
@@ -240,4 +282,3 @@ pub struct SimpleResponse {
     pub ok: bool,
     pub message: Option<String>,
 }
-
