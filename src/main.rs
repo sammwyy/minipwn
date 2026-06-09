@@ -6,6 +6,7 @@ mod tools;
 mod tui;
 mod worker;
 mod commands;
+mod web;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -36,6 +37,14 @@ enum Commands {
         #[arg(long)]
         config: Option<String>,
     },
+    
+    /// Start the web UI server
+    #[command(alias = "W")]
+    Web {
+        /// Port to listen on
+        #[arg(long, default_value_t = 5000)]
+        port: u16,
+    },
 }
 
 #[tokio::main]
@@ -60,6 +69,9 @@ async fn main() -> Result<()> {
             config,
         }) => {
             worker::server::run(secret, port, config).await?;
+        }
+        Some(Commands::Web { port }) => {
+            web::run(port).await?;
         }
         None => {
             tui::run().await?;

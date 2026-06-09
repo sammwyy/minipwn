@@ -48,7 +48,7 @@ pub struct TurnOutcome {
 /// `messages` is the full prompt context (system prompt + prior turns); the
 /// caller owns assembling it from whatever its message history looks like.
 pub async fn run_turn(
-    ui: &mut dyn AgentUi,
+    ui: &mut (dyn AgentUi + Send),
     ctx: TurnContext<'_>,
     mut messages: Vec<ChatMsg>,
 ) -> Result<TurnOutcome> {
@@ -186,6 +186,8 @@ pub async fn run_turn(
                 format_elapsed(elapsed),
             ),
         );
+
+        ui.tool_finish(handle, cmd_text.clone(), result.success, result.output.clone());
 
         messages.push(ChatMsg {
             role: "user".to_string(),

@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>minipwn - Autonomous Agent</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css?v=4">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+
+<body>
+    <div class="app-container">
+        <header class="topbar">
+            <div class="logo">
+                <i class="fa-solid fa-shield-halved"></i>
+                <span>MiniPWN</span>
+            </div>
+            <div class="controls">
+                <div class="dropdown-group">
+                    <label>Worker</label>
+                    <select id="worker-select">
+                        <option value="local">Local Worker</option>
+                        <option value="manage">Manage Workers...</option>
+                    </select>
+                </div>
+                <div class="dropdown-group">
+                    <label>Provider</label>
+                    <select id="provider-select">
+                        <option value="anthropic">Anthropic</option>
+                        <option value="openai">OpenAI</option>
+                        <option value="local">Local</option>
+                    </select>
+                </div>
+                <div class="dropdown-group">
+                    <label>Model</label>
+                    <select id="model-select">
+                        <option value="claude-3-7-sonnet">Claude 3.7 Sonnet</option>
+                    </select>
+                </div>
+            </div>
+        </header>
+
+        <main class="chat-container">
+            <div id="chat-history" class="chat-history">
+                <!-- Bubbles go here -->
+            </div>
+
+            <div class="input-area glassmorphism">
+                <div id="suggestions-panel" class="suggestions-panel"></div>
+                <form id="chat-form">
+                    <textarea id="message-input" placeholder="Type a message or / for commands..." rows="1"></textarea>
+                    <button type="submit" class="send-btn" id="send-btn">
+                        <i class="fa-solid fa-arrow-up"></i>
+                    </button>
+                    <button type="button" class="cancel-btn hidden" id="cancel-btn">
+                        <i class="fa-solid fa-stop"></i>
+                    </button>
+                </form>
+            </div>
+        </main>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="client.js?v=5"></script>
+    <script src="app.js?v=5"></script>
+</body>
+
+</html>

@@ -32,6 +32,9 @@ pub trait AgentUi {
     /// Replace the content of a tool bubble started by [`AgentUi::tool_begin`].
     fn tool_update(&mut self, handle: usize, content: String);
 
+    /// Finalize a tool execution with structured raw output.
+    fn tool_finish(&mut self, _handle: usize, _cmd: String, _success: bool, _output: String) {}
+
     /// Record estimated token usage for the current turn.
     fn record_tokens(&mut self, count: u64);
 
