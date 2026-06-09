@@ -34,15 +34,34 @@ pub struct DeployedContainer {
     pub container_id: String,
 }
 
-/// A runtime worker backed by a Docker container.
+/// A runtime worker backed by an **ephemeral** Docker container.
 ///
 /// Tool execution is identical to a [`RemoteWorker`] (filesystem local, shell
-/// over HTTP); the container id is retained so the deployment can be controlled
-/// later (e.g. stopped or removed).
+/// over HTTP). The deployment is owned entirely by this process: the container
+/// is never persisted to the saved-workers list, and [`Drop`] force-removes it
+/// when the worker goes away, so nothing is left running after the session.
 pub struct DockerWorker {
     inner: RemoteWorker,
-    #[allow(dead_code)]
     container_id: String,
+}
+
+impl Drop for DockerWorker {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        {
+            let api = client::DockerApi::new(DOCKER_SOCKET);
+            match api.remove_container(&self.container_id) {
+                Ok(()) => {
+                    tracing::debug!("Removed ephemeral worker container {}", self.container_id)
+                }
+                Err(err) => tracing::warn!(
+                    "Failed to remove ephemeral worker container {}: {}",
+                    self.container_id,
+                    err
+                ),
+            }
+        }
+    }
 }
 
 impl DockerWorker {

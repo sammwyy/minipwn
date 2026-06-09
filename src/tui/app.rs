@@ -580,7 +580,7 @@ async fn build_worker(
                 bail!("Kali Docker worker validation failed for {}", deployed.url);
             }
 
-            remember_worker(&deployed.name, &deployed.url, &deployed.secret);
+            // Ephemeral: never persisted; the container is torn down on exit.
             Ok(Arc::new(worker))
         }
         WorkerChoice::Saved(idx) => {

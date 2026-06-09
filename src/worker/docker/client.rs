@@ -61,6 +61,9 @@ impl DockerApi {
             },
             "HostConfig": {
                 "Binds": binds,
+                // Ephemeral: Docker auto-removes the container once it stops, as
+                // a safety net in case the explicit teardown does not run.
+                "AutoRemove": true,
                 "PortBindings": {
                     format!("{}/tcp", CONTAINER_PORT): [
                         { "HostIp": "127.0.0.1", "HostPort": "" }
@@ -84,6 +87,14 @@ impl DockerApi {
         let resp = self.request("POST", &path, None)?;
         resp.ensure_success()
             .with_context(|| format!("Docker container start failed for {}", id))
+    }
+
+    /// Force-stop and remove a container, used to tear down ephemeral workers.
+    pub fn remove_container(&self, id: &str) -> Result<()> {
+        let path = format!("/containers/{}?force=true", percent_encode(id));
+        let resp = self.request("DELETE", &path, None)?;
+        resp.ensure_success()
+            .with_context(|| format!("Docker container remove failed for {}", id))
     }
 
     /// Inspect a container and return the published host port for the worker.
