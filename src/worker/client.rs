@@ -5,6 +5,10 @@ use reqwest::Client;
 use serde_json::json;
 use std::time::Duration;
 
+use crate::protocol::{
+    ExecResponse, PingResponse, ShellOpenResponse, ShellReadResponse, SimpleResponse,
+    ValidateResponse, WorkerInfo,
+};
 use crate::tools::{ToolCall, ToolResult};
 
 /// Client for a remote MiniPWN worker instance.
@@ -13,33 +17,6 @@ pub struct WorkerClient {
     pub base_url: String,
     secret: String,
     client: Client,
-}
-
-/// System information returned from the worker /info endpoint.
-#[derive(Debug, serde::Deserialize)]
-pub struct WorkerInfo {
-    pub os: String,
-    pub arch: String,
-    // pub family: String,
-    pub hostname: String,
-    pub cwd: String,
-}
-
-/// Response returned by the worker /ping endpoint.
-#[derive(Debug, serde::Deserialize)]
-pub struct PingResponse {
-    pub pong: bool,
-    pub worker: String,
-    pub port: u16,
-}
-
-/// Response returned by the worker /validate endpoint.
-#[derive(Debug, serde::Deserialize)]
-pub struct WorkerValidation {
-    pub ok: bool,
-    pub secret_valid: bool,
-    pub secret_len: usize,
-    pub info: WorkerInfo,
 }
 
 impl WorkerClient {
@@ -77,7 +54,7 @@ impl WorkerClient {
     }
 
     /// Validate the worker secret and fetch metadata before connecting.
-    pub async fn validate(&self) -> Result<WorkerValidation> {
+    pub async fn validate(&self) -> Result<ValidateResponse> {
         let resp = self
             .client
             .get(format!("{}/validate", self.base_url))
@@ -85,7 +62,7 @@ impl WorkerClient {
             .send()
             .await?
             .error_for_status()?
-            .json::<WorkerValidation>()
+            .json::<ValidateResponse>()
             .await?;
         Ok(resp)
     }
@@ -124,14 +101,7 @@ impl WorkerClient {
     }
 
     async fn exec_command(&self, command: &str) -> Result<ToolResult> {
-        #[derive(serde::Deserialize)]
-        struct ExecResp {
-            stdout: String,
-            stderr: String,
-            exit_code: i32,
-        }
-
-        let resp: ExecResp = self
+        let resp: ExecResponse = self
             .client
             .post(format!("{}/exec", self.base_url))
             .header("Authorization", self.auth_header())
@@ -155,14 +125,8 @@ impl WorkerClient {
     }
 
     async fn shell_open(&self, call: &ToolCall) -> Result<ToolResult> {
-        #[derive(serde::Deserialize)]
-        struct Resp {
-            id: String,
-            error: Option<String>,
-        }
-
         let id = call.args.get("id").and_then(|v| v.as_str());
-        let resp: Resp = self
+        let resp: ShellOpenResponse = self
             .client
             .post(format!("{}/shell/open", self.base_url))
             .header("Authorization", self.auth_header())
@@ -184,12 +148,6 @@ impl WorkerClient {
     }
 
     async fn shell_write(&self, call: &ToolCall) -> Result<ToolResult> {
-        #[derive(serde::Deserialize)]
-        struct Resp {
-            ok: bool,
-            message: Option<String>,
-        }
-
         let id = call.args.get("id").and_then(|v| v.as_str()).unwrap_or("");
         let input = call
             .args
@@ -197,7 +155,7 @@ impl WorkerClient {
             .and_then(|v| v.as_str())
             .unwrap_or("");
 
-        let resp: Resp = self
+        let resp: SimpleResponse = self
             .client
             .post(format!("{}/shell/write", self.base_url))
             .header("Authorization", self.auth_header())
@@ -218,15 +176,9 @@ impl WorkerClient {
     }
 
     async fn shell_read(&self, call: &ToolCall) -> Result<ToolResult> {
-        #[derive(serde::Deserialize)]
-        struct Resp {
-            output: String,
-            error: Option<String>,
-        }
-
         let id = call.args.get("id").and_then(|v| v.as_str()).unwrap_or("");
 
-        let resp: Resp = self
+        let resp: ShellReadResponse = self
             .client
             .post(format!("{}/shell/read", self.base_url))
             .header("Authorization", self.auth_header())
@@ -244,15 +196,9 @@ impl WorkerClient {
     }
 
     async fn shell_close(&self, call: &ToolCall) -> Result<ToolResult> {
-        #[derive(serde::Deserialize)]
-        struct Resp {
-            ok: bool,
-            message: Option<String>,
-        }
-
         let id = call.args.get("id").and_then(|v| v.as_str()).unwrap_or("");
 
-        let resp: Resp = self
+        let resp: SimpleResponse = self
             .client
             .post(format!("{}/shell/close", self.base_url))
             .header("Authorization", self.auth_header())

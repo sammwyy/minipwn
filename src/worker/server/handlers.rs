@@ -1,13 +1,17 @@
 //! HTTP request handlers for the worker server.
 
 use axum::{Json, extract::State, http::StatusCode};
-use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
 use super::state::{AppState, ShellSession};
+use crate::protocol::{
+    ExecRequest, ExecResponse, PingResponse, ShellCloseRequest, ShellOpenRequest,
+    ShellOpenResponse, ShellReadRequest, ShellReadResponse, ShellWriteRequest, SimpleResponse,
+    ValidateResponse, WorkerInfo,
+};
 
 /// GET /info — Return worker system information.
 pub async fn handle_info(State(state): State<AppState>) -> Json<WorkerInfo> {
@@ -206,79 +210,3 @@ pub async fn handle_shell_close(
     }
 }
 
-// ---- Request / Response types ----
-
-#[derive(Debug, Serialize)]
-pub struct WorkerInfo {
-    pub os: String,
-    pub arch: String,
-    pub family: String,
-    pub hostname: String,
-    pub cwd: String,
-}
-
-#[derive(Debug, Serialize)]
-pub struct PingResponse {
-    pub pong: bool,
-    pub worker: String,
-    pub port: u16,
-}
-
-#[derive(Debug, Serialize)]
-pub struct ValidateResponse {
-    pub ok: bool,
-    pub secret_valid: bool,
-    pub secret_len: usize,
-    pub info: WorkerInfo,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ExecRequest {
-    pub command: String,
-}
-
-#[derive(Debug, Serialize)]
-pub struct ExecResponse {
-    pub stdout: String,
-    pub stderr: String,
-    pub exit_code: i32,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ShellOpenRequest {
-    pub id: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct ShellOpenResponse {
-    pub id: String,
-    pub error: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ShellWriteRequest {
-    pub id: String,
-    pub input: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ShellReadRequest {
-    pub id: String,
-}
-
-#[derive(Debug, Serialize)]
-pub struct ShellReadResponse {
-    pub output: String,
-    pub error: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ShellCloseRequest {
-    pub id: String,
-}
-
-#[derive(Debug, Serialize)]
-pub struct SimpleResponse {
-    pub ok: bool,
-    pub message: Option<String>,
-}

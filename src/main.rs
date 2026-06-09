@@ -1,5 +1,7 @@
+mod agent;
 mod ai;
 mod config;
+mod protocol;
 mod tools;
 mod tui;
 mod worker;
@@ -57,7 +59,7 @@ async fn main() -> Result<()> {
             port,
             config,
         }) => {
-            worker::run(secret, port, config).await?;
+            worker::server::run(secret, port, config).await?;
         }
         None => {
             tui::run().await?;

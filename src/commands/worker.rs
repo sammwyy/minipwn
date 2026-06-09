@@ -22,12 +22,7 @@ impl Command for WorkerCommand {
     async fn execute(&self, app: &mut App, _name: &str, args: &[&str]) -> Result<String> {
         if args.is_empty() || args[0].is_empty() || args[0] == "list" {
             let list = load_workers_list().unwrap_or_default();
-            let current = match &app.execution_mode {
-                crate::tools::ExecutionMode::Local { .. } => "local".to_string(),
-                crate::tools::ExecutionMode::Remote { client, .. } => client.base_url.clone(),
-            };
-
-            let mut lines = vec![format!("Current worker: {}", current)];
+            let mut lines = vec![format!("Current worker: {}", app.worker.display_name())];
             if list.workers.is_empty() {
                 lines.push("No saved workers. Use /worker add <url> <secret> [name]".to_string());
             } else {

@@ -1,4 +1,9 @@
-//! Docker-backed worker deployment helpers.
+//! Minimal Docker Engine API client speaking HTTP over the Unix socket.
+//!
+//! Only the handful of endpoints needed to deploy a worker container are
+//! implemented: image pull, container create/start, and inspect.
+
+#![cfg(unix)]
 
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
@@ -6,131 +11,29 @@ use serde_json::json;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::time::Duration;
-use tokio::sync::mpsc::UnboundedSender;
 
-use crate::config::generate_secret;
+use super::{CONTAINER_PORT, KALI_IMAGE, WORKER_BIN_PATH, WORKSPACE_PATH};
 
-const DOCKER_SOCKET: &str = "/var/run/docker.sock";
-const KALI_IMAGE: &str = "kalilinux/kali-rolling";
-const CONTAINER_PORT: u16 = 10000;
-const WORKER_BIN_PATH: &str = "/usr/local/bin/minipwn";
-const WORKSPACE_PATH: &str = "/workspace";
-
-#[derive(Debug, Clone)]
-pub struct DockerWorker {
-    pub name: String,
-    pub url: String,
-    pub secret: String,
-}
-
-/// Deploy a Kali Linux container running the current MiniPWN binary as a worker.
-pub async fn deploy_kali_worker(
-    workspace: &Path,
-    log_tx: Option<UnboundedSender<String>>,
-) -> Result<DockerWorker> {
-    #[cfg(not(unix))]
-    {
-        let _ = workspace;
-        bail!("Kali Docker workers require a Unix Docker socket");
-    }
-
-    #[cfg(unix)]
-    {
-        let bin = std::env::current_exe().context("Could not resolve current minipwn binary")?;
-        let bin = bin
-            .canonicalize()
-            .with_context(|| format!("Could not canonicalize {}", bin.display()))?;
-        let workspace = workspace
-            .canonicalize()
-            .with_context(|| format!("Could not canonicalize {}", workspace.display()))?;
-
-        let api = DockerApi::new(DOCKER_SOCKET);
-        log(
-            &log_tx,
-            format!("Resolving Docker socket at {}", DOCKER_SOCKET),
-        );
-        log(&log_tx, format!("Pulling image {}", KALI_IMAGE));
-        api.pull_image(KALI_IMAGE)?;
-
-        let secret = generate_secret();
-        let name = format!("minipwn-kali-{}", short_id());
-        log(&log_tx, format!("Creating container {}", name));
-        let container_id = api.create_worker_container(&name, &bin, &workspace, &secret)?;
-        log(&log_tx, format!("Starting container {}", container_id));
-        api.start_container(&container_id)?;
-
-        log(&log_tx, "Inspecting published port".to_string());
-        let host_port = api.inspect_host_port(&container_id)?;
-        let url = format!("http://127.0.0.1:{}", host_port);
-
-        log(&log_tx, format!("Waiting for worker at {}", url));
-        wait_for_worker(&url, &secret).await?;
-        log(&log_tx, "Worker validated successfully".to_string());
-
-        Ok(DockerWorker {
-            name: "kali-docker".to_string(),
-            url,
-            secret,
-        })
-    }
-}
-
-fn log(tx: &Option<UnboundedSender<String>>, message: String) {
-    if let Some(tx) = tx {
-        let _ = tx.send(message);
-    }
-}
-
-async fn wait_for_worker(url: &str, secret: &str) -> Result<()> {
-    let client = crate::worker::client::WorkerClient::new(url, secret);
-    let mut last_err = None;
-
-    for _ in 0..30 {
-        match client.validate().await {
-            Ok(validation) if validation.ok && validation.secret_valid => return Ok(()),
-            Ok(_) => last_err = Some(anyhow::anyhow!("worker rejected validation")),
-            Err(err) => last_err = Some(err),
-        }
-        tokio::time::sleep(Duration::from_millis(500)).await;
-    }
-
-    Err(last_err.unwrap_or_else(|| anyhow::anyhow!("worker did not become ready")))
-}
-
-fn short_id() -> String {
-    use rand::Rng;
-
-    let mut rng = rand::thread_rng();
-    (0..8)
-        .map(|_| {
-            let idx = rng.gen_range(0..36);
-            match idx {
-                0..=9 => (b'0' + idx) as char,
-                _ => (b'a' + idx - 10) as char,
-            }
-        })
-        .collect()
-}
-
-#[cfg(unix)]
-struct DockerApi {
+/// A thin client over the Docker daemon Unix socket.
+pub struct DockerApi {
     socket_path: &'static str,
 }
 
-#[cfg(unix)]
 impl DockerApi {
-    fn new(socket_path: &'static str) -> Self {
+    pub fn new(socket_path: &'static str) -> Self {
         Self { socket_path }
     }
 
-    fn pull_image(&self, image: &str) -> Result<()> {
+    /// Pull an image, blocking until the pull completes.
+    pub fn pull_image(&self, image: &str) -> Result<()> {
         let path = format!("/images/create?fromImage={}", percent_encode(image));
         let resp = self.request("POST", &path, None)?;
         resp.ensure_success()
             .with_context(|| format!("Docker image pull failed for {}", image))
     }
 
-    fn create_worker_container(
+    /// Create a worker container that mounts the binary and workspace read-only.
+    pub fn create_worker_container(
         &self,
         name: &str,
         bin: &Path,
@@ -175,14 +78,16 @@ impl DockerApi {
         Ok(created.id)
     }
 
-    fn start_container(&self, id: &str) -> Result<()> {
+    /// Start a previously created container.
+    pub fn start_container(&self, id: &str) -> Result<()> {
         let path = format!("/containers/{}/start", percent_encode(id));
         let resp = self.request("POST", &path, None)?;
         resp.ensure_success()
             .with_context(|| format!("Docker container start failed for {}", id))
     }
 
-    fn inspect_host_port(&self, id: &str) -> Result<u16> {
+    /// Inspect a container and return the published host port for the worker.
+    pub fn inspect_host_port(&self, id: &str) -> Result<u16> {
         let path = format!("/containers/{}/json", percent_encode(id));
         let resp = self.request("GET", &path, None)?;
         resp.ensure_success()
@@ -226,13 +131,11 @@ impl DockerApi {
     }
 }
 
-#[cfg(unix)]
 struct DockerResponse {
     status: u16,
     body: Vec<u8>,
 }
 
-#[cfg(unix)]
 impl DockerResponse {
     fn ensure_success(&self) -> Result<()> {
         if (200..300).contains(&self.status) {
@@ -244,7 +147,6 @@ impl DockerResponse {
     }
 }
 
-#[cfg(unix)]
 fn parse_response(raw: Vec<u8>) -> Result<DockerResponse> {
     let header_end = raw
         .windows(4)
@@ -269,7 +171,6 @@ fn parse_response(raw: Vec<u8>) -> Result<DockerResponse> {
     Ok(DockerResponse { status, body })
 }
 
-#[cfg(unix)]
 fn decode_chunked(body: &[u8]) -> Result<Vec<u8>> {
     let mut decoded = Vec::new();
     let mut idx = 0;
@@ -302,7 +203,6 @@ fn decode_chunked(body: &[u8]) -> Result<Vec<u8>> {
     Ok(decoded)
 }
 
-#[cfg(unix)]
 fn bind_path(path: &Path) -> String {
     path.to_string_lossy().to_string()
 }

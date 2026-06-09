@@ -1,14 +1,42 @@
-//! Tool definitions and execution routing.
-//! Tools are invoked by the AI agent via JSON tool-call responses.
+//! Tool definitions and execution primitives.
+//!
+//! Tools are invoked by the AI agent via JSON tool-call responses. This module
+//! owns the tool protocol ([`ToolCall`]/[`ToolResult`], parsing) and the local
+//! "sandbox" implementations ([`execute_fs_tool`], [`execute_shell_tool_local`]).
+//! Routing a call to a backend is the job of a [`crate::worker::Worker`].
 
-mod executor;
 mod fs_tools;
 mod sanitize;
 mod shell_tools;
 
-pub use executor::*;
+pub use fs_tools::execute_fs_tool;
+pub use shell_tools::execute_shell_tool_local;
 
 use serde::{Deserialize, Serialize};
+
+/// Tool names handled by the filesystem sandbox (always run locally).
+pub const FS_TOOLS: &[&str] = &[
+    "fs_ls", "fs_read", "fs_write", "fs_mkdir", "fs_rm", "fs_copy", "fs_mv",
+];
+
+/// Tool names handled by the shell backend (local or routed to a worker).
+pub const SHELL_TOOLS: &[&str] = &[
+    "shell_exec",
+    "shell_open",
+    "shell_write",
+    "shell_read",
+    "shell_close",
+];
+
+/// Whether `tool` is a filesystem tool.
+pub fn is_fs_tool(tool: &str) -> bool {
+    FS_TOOLS.contains(&tool)
+}
+
+/// Whether `tool` is a shell tool.
+pub fn is_shell_tool(tool: &str) -> bool {
+    SHELL_TOOLS.contains(&tool)
+}
 
 /// A tool invocation parsed from AI output.
 #[derive(Debug, Clone, Serialize, Deserialize)]

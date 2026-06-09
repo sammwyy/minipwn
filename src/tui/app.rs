@@ -8,18 +8,17 @@ use std::time::Duration;
 
 use crate::ai::{AiClient, ChatMsg};
 use crate::commands::CommandRegistry;
-use crate::config::load_system_prompt;
 use crate::config::{
     ChatMessage, GlobalConfig, Provider, SavedWorker, Secrets, WorkersList, WorkspaceMeta,
     WorkspaceStats, add_tokens, append_message, init_config_dirs, load_chat, load_global_config,
     load_workers_list, load_workspace_meta, load_workspace_stats, save_workers_list,
 };
-use crate::tools::{ExecutionMode, extract_tool_call};
+use crate::agent::{self, AgentUi};
 use crate::tui::theme::{Theme, ThemeRegistry};
-use crate::worker::client::WorkerClient;
+use crate::worker::{DockerWorker, LocalWorker, RemoteWorker, Worker};
 
 use super::render::render_ui;
-use super::worker_select::{WorkerChoice, worker_select_screen};
+use super::screens::{WorkerChoice, worker_select_screen};
 
 /// A displayed chat bubble.
 #[derive(Debug, Clone)]
@@ -74,7 +73,7 @@ pub struct App {
     pub global_config: GlobalConfig,
     pub theme: Theme,
     pub theme_registry: ThemeRegistry,
-    pub execution_mode: ExecutionMode,
+    pub worker: Arc<dyn Worker>,
     pub is_thinking: bool,
     pub scroll_offset: u16,
     pub input_history: Vec<String>,
@@ -103,7 +102,7 @@ pub async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Resul
     let choice = worker_select_screen(terminal, &workers, &theme).await?;
     let workers = load_workers_list().unwrap_or_default();
 
-    let execution_mode = build_execution_mode(choice, &workers, terminal, &theme).await?;
+    let worker = build_worker(choice, &workers, terminal, &theme).await?;
 
     // Load workspace state
     let meta = load_workspace_meta().unwrap_or_default();
@@ -134,27 +133,14 @@ pub async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Resul
             let rest = &m.content["Tool result:\n[Tool: ".len()..];
             if let Some(bracket_idx) = rest.find(']') {
                 let tool_name = &rest[..bracket_idx];
-                let nice_tool_name = tool_name
-                    .split('_')
-                    .map(|s| {
-                        let mut c = s.chars();
-                        match c.next() {
-                            None => String::new(),
-                            Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
-                        }
-                    })
-                    .collect::<Vec<_>>()
-                    .join(" ");
+                let nice_tool_name = agent::pretty_tool_name(tool_name);
 
                 let rest2 = &rest[bracket_idx + 2..];
                 if let Some(newline_idx) = rest2.find('\n') {
                     let status_str = &rest2[..newline_idx];
                     let output = &rest2[newline_idx + 1..];
 
-                    let mut brief = output.replace('\n', " ");
-                    if brief.chars().count() > 32 {
-                        brief = format!("{}...", brief.chars().take(32).collect::<String>());
-                    }
+                    let brief = agent::summarize_output(output);
 
                     let status_prefix = if status_str == "OK" {
                         "Success:"
@@ -193,7 +179,7 @@ pub async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Resul
         global_config,
         theme,
         theme_registry,
-        execution_mode,
+        worker,
         is_thinking: false,
         scroll_offset: 0,
         input_history: vec![],
@@ -406,13 +392,81 @@ pub async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Resul
     Ok(())
 }
 
-/// Send a user message, call the AI, process any tool calls, and update state.
+/// A ratatui-backed [`AgentUi`]: bridges the agent loop to the [`App`] state
+/// and the terminal. This is the only place the agent touches the TUI.
+struct TuiAgentUi<'a> {
+    app: &'a mut App,
+    terminal: &'a mut Terminal<CrosstermBackend<Stdout>>,
+}
+
+#[async_trait::async_trait]
+impl AgentUi for TuiAgentUi<'_> {
+    fn assistant(&mut self, text: String, ephemeral: bool) {
+        self.app.bubbles.push(Bubble {
+            role: "assistant".to_string(),
+            content: text,
+            is_ephemeral: ephemeral,
+        });
+    }
+
+    fn tool_begin(&mut self, content: String) -> usize {
+        let idx = self.app.bubbles.len();
+        self.app.bubbles.push(Bubble {
+            role: "tool".to_string(),
+            content,
+            is_ephemeral: false,
+        });
+        idx
+    }
+
+    fn tool_update(&mut self, handle: usize, content: String) {
+        if let Some(bubble) = self.app.bubbles.get_mut(handle) {
+            bubble.content = content;
+        }
+    }
+
+    fn record_tokens(&mut self, count: u64) {
+        let _ = add_tokens(count);
+        self.app.stats.total_tokens += count;
+    }
+
+    fn set_thinking(&mut self, thinking: bool) {
+        self.app.is_thinking = thinking;
+    }
+
+    fn set_status(&mut self, status: String) {
+        self.app.status = status;
+    }
+
+    fn redraw(&mut self) -> Result<()> {
+        self.terminal.draw(|f| render_ui(f, self.app))?;
+        Ok(())
+    }
+
+    async fn wait_cancel(&mut self) {
+        loop {
+            if crossterm::event::poll(std::time::Duration::from_millis(50)).unwrap_or(false) {
+                if let Ok(crossterm::event::Event::Key(k)) = crossterm::event::read() {
+                    if k.code == crossterm::event::KeyCode::Esc
+                        || (k.code == crossterm::event::KeyCode::Char('c')
+                            && k.modifiers.contains(crossterm::event::KeyModifiers::CONTROL))
+                    {
+                        return;
+                    }
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }
+}
+
+/// Send a user message and run one agent turn against it.
 async fn send_message(
     app: &mut App,
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     content: &str,
 ) -> Result<()> {
-    // Add user bubble
+    // Record the user's message.
     app.bubbles.push(Bubble {
         role: "user".to_string(),
         content: content.to_string(),
@@ -427,7 +481,7 @@ async fn send_message(
         },
     )?;
 
-    // Build AI client
+    // Build the AI client (surfacing config errors as a chat bubble).
     let ai_client = match AiClient::from_secrets(&app.secrets, &app.provider) {
         Ok(c) => c,
         Err(e) => {
@@ -441,13 +495,11 @@ async fn send_message(
         }
     };
 
-    // Build message list: system prompt + all bubbles
-    let system_prompt = build_system_prompt(app).await;
+    // Assemble the prompt: system prompt + the non-tool bubbles so far.
     let mut messages = vec![ChatMsg {
         role: "system".to_string(),
-        content: system_prompt,
+        content: agent::system_prompt(&app.meta.mode, app.worker.as_ref()).await,
     }];
-
     for bubble in &app.bubbles {
         if bubble.role != "tool" {
             messages.push(ChatMsg {
@@ -457,196 +509,27 @@ async fn send_message(
         }
     }
 
-    // Agentic loop: AI → tool call → result → AI (up to 10 iterations)
-    app.is_thinking = true;
-    terminal.draw(|f| render_ui(f, app))?;
-
-    let mut iterations = 0;
+    // Snapshot the bits the agent needs without borrowing `app` for the turn.
+    let worker = Arc::clone(&app.worker);
+    let chat_id = app.chat_id.clone();
     let max_iterations = app.global_config.max_iterations;
 
-    loop {
-        iterations += 1;
-        if iterations > max_iterations {
-            app.bubbles.push(Bubble {
-                role: "assistant".to_string(),
-                content: "[Max tool iterations reached. Type 'Continue' to keep going.]"
-                    .to_string(),
-                is_ephemeral: false,
-            });
-            break;
-        }
+    let mut ui = TuiAgentUi { app, terminal };
+    agent::run_turn(
+        &mut ui,
+        agent::TurnContext {
+            ai: &ai_client,
+            worker: worker.as_ref(),
+            chat_id: &chat_id,
+            max_iterations,
+        },
+        messages,
+    )
+    .await?;
 
-        let reply_result = tokio::select! {
-            res = ai_client.complete(messages.clone()) => Some(res),
-            _ = async {
-                loop {
-                    if crossterm::event::poll(std::time::Duration::from_millis(50)).unwrap_or(false) {
-                        if let Ok(crossterm::event::Event::Key(k)) = crossterm::event::read() {
-                            if k.code == crossterm::event::KeyCode::Esc ||
-                               (k.code == crossterm::event::KeyCode::Char('c') && k.modifiers.contains(crossterm::event::KeyModifiers::CONTROL)) {
-                                break;
-                            }
-                        }
-                    }
-                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-                }
-            } => None,
-        };
-
-        let reply = match reply_result {
-            Some(Ok(r)) => r,
-            Some(Err(e)) => {
-                app.status = format!("API error: {}", e);
-                app.bubbles.push(Bubble {
-                    role: "assistant".to_string(),
-                    content: format!("API error: {}", e),
-                    is_ephemeral: false,
-                });
-                break;
-            }
-            None => {
-                app.status = "Generation cancelled by user".to_string();
-                app.bubbles.push(Bubble {
-                    role: "assistant".to_string(),
-                    content: "[Generation cancelled]".to_string(),
-                    is_ephemeral: true,
-                });
-                break;
-            }
-        };
-
-        // Estimate tokens (very rough: chars / 4)
-        let sent_tokens = messages.iter().map(|m| m.content.len()).sum::<usize>() / 4;
-        let recv_tokens = reply.len() / 4;
-        let total = (sent_tokens + recv_tokens) as u64;
-        let _ = add_tokens(total);
-        app.stats.total_tokens += total;
-
-        // Add assistant reply to message history
-        messages.push(ChatMsg {
-            role: "assistant".to_string(),
-            content: reply.clone(),
-        });
-
-        // Check for a tool call in the reply
-        if let Some(tool_call) = extract_tool_call(&reply) {
-            // Show the AI message with tool invocation (stripped of JSON)
-            let stripped_reply = crate::tools::strip_tool_call(&reply);
-            if !stripped_reply.is_empty() {
-                app.bubbles.push(Bubble {
-                    role: "assistant".to_string(),
-                    content: stripped_reply,
-                    is_ephemeral: false,
-                });
-            }
-
-            append_message(
-                &app.chat_id,
-                ChatMessage {
-                    role: "assistant".to_string(),
-                    content: reply.clone(), // Keep full reply in persistent history
-                    timestamp: chrono::Utc::now(),
-                },
-            )?;
-
-            terminal.draw(|f| render_ui(f, app))?;
-
-            let nice_tool_name = tool_call
-                .tool
-                .split('_')
-                .map(|s| {
-                    let mut c = s.chars();
-                    match c.next() {
-                        None => String::new(),
-                        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join(" ");
-
-            let cmd_text = if tool_call.tool == "shell_exec" {
-                tool_call
-                    .args
-                    .get("command")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string()
-            } else {
-                tool_call.args.to_string()
-            };
-
-            // Push a "Running..." bubble
-            let tool_bubble_idx = app.bubbles.len();
-            app.bubbles.push(Bubble {
-                role: "tool".to_string(),
-                content: format!("{}: {}\nRunning...", nice_tool_name, cmd_text),
-                is_ephemeral: false,
-            });
-            terminal.draw(|f| render_ui(f, app))?;
-
-            // Execute the tool
-            let start_time = std::time::Instant::now();
-            let result = app.execution_mode.execute(&tool_call).await;
-            let elapsed = start_time.elapsed();
-
-            let full_result_text = format!(
-                "[Tool: {}] {}\n{}",
-                tool_call.tool,
-                if result.success { "OK" } else { "FAILED" },
-                result.output
-            );
-
-            // Create a brief summary for the UI
-            let mut brief = result.output.replace('\n', " ");
-            if brief.chars().count() > 32 {
-                brief = format!("{}...", brief.chars().take(32).collect::<String>());
-            }
-
-            let secs = elapsed.as_secs();
-            let ms = elapsed.subsec_millis();
-            let time_str = format!("{:02}:{:02}.{:03}", secs / 60, secs % 60, ms);
-
-            let status_prefix = if result.success { "Success:" } else { "Error:" };
-
-            app.bubbles[tool_bubble_idx].content = format!(
-                "{}: {}\n{} {} ({})",
-                nice_tool_name, cmd_text, status_prefix, brief, time_str
-            );
-
-            // Feed result back to AI
-            messages.push(ChatMsg {
-                role: "user".to_string(),
-                content: format!("Tool result:\n{}", full_result_text),
-            });
-
-            terminal.draw(|f| render_ui(f, app))?;
-        } else {
-            // No tool call — final response
-            app.bubbles.push(Bubble {
-                role: "assistant".to_string(),
-                content: reply.clone(),
-                is_ephemeral: false,
-            });
-            append_message(
-                &app.chat_id,
-                ChatMessage {
-                    role: "assistant".to_string(),
-                    content: reply,
-                    timestamp: chrono::Utc::now(),
-                },
-            )?;
-            break;
-        }
-    }
-
-    // Clean up ephemeral bubbles when user sends a new message
-    // Actually, user wants them to stay until next message or something?
-    // "chat bubble que no quede en el historial"
-    // I'll keep them in app.bubbles but they won't be saved.
-    // When run_app starts, it only loads from disk, so ephemeral bubbles disappear.
-
-    app.is_thinking = false;
-    app.scroll_offset = 0;
+    // Ephemeral bubbles stay on screen but are never persisted, so they vanish
+    // on the next launch (which only reloads messages from disk).
+    ui.app.scroll_offset = 0;
     Ok(())
 }
 
@@ -673,35 +556,13 @@ fn update_suggestions(app: &mut App) {
     app.suggestions = filtered;
 }
 
-/// Build the system prompt, injecting worker OS info if available.
-async fn build_system_prompt(app: &App) -> String {
-    let base = load_system_prompt(&app.meta.mode);
-
-    let worker_info = match &app.execution_mode {
-        ExecutionMode::Remote { client, .. } => match client.get_info().await {
-            Ok(info) => format!(
-                "Remote worker: {} ({}), hostname: {}, cwd: {}",
-                info.os, info.arch, info.hostname, info.cwd
-            ),
-            Err(_) => "Remote worker (info unavailable)".to_string(),
-        },
-        ExecutionMode::Local { .. } => format!(
-            "Local execution: {} ({})",
-            std::env::consts::OS,
-            std::env::consts::ARCH
-        ),
-    };
-
-    base.replace("{{WORKER_INFO}}", &worker_info)
-}
-
-/// Build the execution mode from the worker selection.
-async fn build_execution_mode(
+/// Build the active [`Worker`] from the startup selection.
+async fn build_worker(
     choice: WorkerChoice,
     workers: &WorkersList,
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     theme: &Theme,
-) -> Result<ExecutionMode> {
+) -> Result<Arc<dyn Worker>> {
     let workspace = std::env::current_dir()?
         .join(".minipwn")
         .parent()
@@ -709,65 +570,52 @@ async fn build_execution_mode(
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
 
     match choice {
-        WorkerChoice::NoWorker => Ok(ExecutionMode::Local { workspace }),
+        WorkerChoice::NoWorker => Ok(Arc::new(LocalWorker::new(workspace))),
         WorkerChoice::DockerKali => {
-            let docker_worker =
-                super::worker_select::docker_deploy_screen(terminal, theme, &workspace).await?;
-            let client = WorkerClient::new(&docker_worker.url, &docker_worker.secret);
-            let validation = client.validate().await?;
+            let deployed =
+                super::screens::docker_deploy_screen(terminal, theme, &workspace).await?;
+            let worker = DockerWorker::new(&deployed, workspace);
+            let validation = worker.client().validate().await?;
             if !validation.ok || !validation.secret_valid {
-                bail!(
-                    "Kali Docker worker validation failed for {}",
-                    docker_worker.url
-                );
+                bail!("Kali Docker worker validation failed for {}", deployed.url);
             }
 
-            let mut list = load_workers_list().unwrap_or_default();
-            if let Some(existing) = list.workers.iter_mut().find(|w| w.url == docker_worker.url) {
-                existing.name = docker_worker.name;
-                existing.secret = docker_worker.secret;
-            } else {
-                list.workers.push(SavedWorker {
-                    name: docker_worker.name,
-                    url: docker_worker.url.clone(),
-                    secret: docker_worker.secret,
-                });
-            }
-            let _ = save_workers_list(&list);
-
-            Ok(ExecutionMode::Remote { client, workspace })
+            remember_worker(&deployed.name, &deployed.url, &deployed.secret);
+            Ok(Arc::new(worker))
         }
         WorkerChoice::Saved(idx) => {
             let w = &workers.workers[idx];
-            let client = WorkerClient::new(&w.url, &w.secret);
-            let validation = client.validate().await?;
+            let worker = RemoteWorker::new(w.name.clone(), &w.url, &w.secret, workspace);
+            let validation = worker.client().validate().await?;
             if !validation.ok || !validation.secret_valid {
                 bail!("Worker validation failed for {}", w.url);
             }
-            Ok(ExecutionMode::Remote { client, workspace })
+            Ok(Arc::new(worker))
         }
         WorkerChoice::New { url, secret, name } => {
-            let client = WorkerClient::new(&url, &secret);
-            let validation = client.validate().await?;
+            let worker = RemoteWorker::new(name.clone(), &url, &secret, workspace);
+            let validation = worker.client().validate().await?;
             if !validation.ok || !validation.secret_valid {
                 bail!("Worker validation failed for {}", url);
             }
-
-            // Save the new worker
-            let mut list = load_workers_list().unwrap_or_default();
-            if let Some(existing) = list.workers.iter_mut().find(|w| w.url == url) {
-                existing.name = name;
-                existing.secret = secret;
-            } else {
-                list.workers.push(SavedWorker {
-                    name,
-                    url: url.clone(),
-                    secret,
-                });
-            }
-            let _ = save_workers_list(&list);
-
-            Ok(ExecutionMode::Remote { client, workspace })
+            remember_worker(&name, &url, &secret);
+            Ok(Arc::new(worker))
         }
     }
+}
+
+/// Persist a worker to the saved-workers list, updating any existing entry.
+fn remember_worker(name: &str, url: &str, secret: &str) {
+    let mut list = load_workers_list().unwrap_or_default();
+    if let Some(existing) = list.workers.iter_mut().find(|w| w.url == url) {
+        existing.name = name.to_string();
+        existing.secret = secret.to_string();
+    } else {
+        list.workers.push(SavedWorker {
+            name: name.to_string(),
+            url: url.to_string(),
+            secret: secret.to_string(),
+        });
+    }
+    let _ = save_workers_list(&list);
 }

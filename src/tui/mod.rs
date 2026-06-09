@@ -4,8 +4,8 @@ pub mod app;
 mod events;
 mod input;
 pub mod render;
+pub mod screens;
 pub mod theme;
-pub mod worker_select;
 
 use anyhow::Result;
 use crossterm::{

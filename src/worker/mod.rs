@@ -1,43 +1,25 @@
-//! Worker mode: HTTP server exposing shell and system info endpoints.
+//! Worker subsystem.
+//!
+//! A [`Worker`] is the backend that executes agent tool calls. Three concrete
+//! implementations are provided:
+//!
+//! - [`LocalWorker`] — the "no worker" sandbox, running tools on the host.
+//! - [`RemoteWorker`] — talks to a standalone worker server over HTTP.
+//! - [`DockerWorker`] — deploys and drives a Kali container as a worker.
+//!
+//! Supporting pieces live alongside them: [`client`] (HTTP client to a worker
+//! server), [`discovery`] (LAN auto-discovery), and [`server`] (the daemon side
+//! started by `minipwn worker`).
 
 pub mod client;
 pub mod discovery;
 pub mod docker;
-mod handlers;
-mod routes;
-mod state;
+pub mod local;
+pub mod remote;
+pub mod server;
+mod traits;
 
-use anyhow::Result;
-use std::net::SocketAddr;
-
-use crate::config::{WorkerConfig, worker_config_path};
-
-/// Entry point for `minipwn worker` / `minipwn w`.
-pub async fn run(
-    secret_override: Option<String>,
-    port_override: Option<u16>,
-    config_path_override: Option<String>,
-) -> Result<()> {
-    let cfg_path = worker_config_path(config_path_override.as_deref())?;
-    let mut cfg = WorkerConfig::load_or_default(&cfg_path)?;
-    cfg.apply_overrides(secret_override, port_override);
-
-    let addr: SocketAddr = format!("0.0.0.0:{}", cfg.server.port).parse()?;
-
-    println!("MiniPWN Worker starting on {}", addr);
-    println!("Secret: {}", cfg.server.secret);
-    println!("Config: {}", cfg_path.display());
-
-    let discovery_cfg = cfg.clone();
-    tokio::spawn(async move {
-        if let Err(err) = discovery::serve(discovery_cfg).await {
-            tracing::warn!("Worker discovery server stopped: {}", err);
-        }
-    });
-
-    let app = routes::build_router(cfg);
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
-
-    Ok(())
-}
+pub use docker::{DeployedContainer, DockerWorker, deploy_kali_worker};
+pub use local::LocalWorker;
+pub use remote::RemoteWorker;
+pub use traits::{Worker, WorkerKind};

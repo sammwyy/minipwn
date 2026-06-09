@@ -665,19 +665,7 @@ fn render_input_box(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
-    let worker_label = match &app.execution_mode {
-        crate::tools::ExecutionMode::Local { .. } => "◈ LOCAL".to_string(),
-        crate::tools::ExecutionMode::Remote { client, .. } => {
-            let host = client
-                .base_url
-                .trim_start_matches("http://")
-                .trim_start_matches("https://")
-                .split(':')
-                .next()
-                .unwrap_or("REMOTE");
-            format!("◈ REMOTE ({})", host)
-        }
-    };
+    let worker_label = app.worker.status_label();
 
     let provider_name = app.provider.display_name().to_uppercase();
     let model_name = app
